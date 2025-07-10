@@ -2,25 +2,45 @@ package dev.stroe.netlens
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.os.Bundle
+import android.util.Log
+import android.view.Surface
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import dev.stroe.netlens.camera.CameraStreamingService
 import dev.stroe.netlens.camera.Resolution
+import dev.stroe.netlens.camera.CameraInfo
 import dev.stroe.netlens.preferences.AppPreferences
 import dev.stroe.netlens.ui.theme.NetLensTheme
+import dev.stroe.netlens.ui.SettingsScreen
 import java.net.NetworkInterface
 
 class MainActivity : ComponentActivity() {
@@ -31,6 +51,9 @@ class MainActivity : ComponentActivity() {
     private var availableResolutions by mutableStateOf<List<Resolution>>(emptyList())
     private var selectedResolution by mutableStateOf<Resolution?>(null)
     private var selectedPort by mutableStateOf("8082")
+    private var availableCameras by mutableStateOf<List<CameraInfo>>(emptyList())
+    private var selectedCamera by mutableStateOf<CameraInfo?>(null)
+    private var showSettings by mutableStateOf(false)
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -40,6 +63,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -63,16 +87,23 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             NetLensTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    CameraStreamingUI(
-                        modifier = Modifier.padding(innerPadding),
-                        isStreaming = isStreaming,
-                        streamUrl = streamUrl,
+                if (showSettings) {
+                    SettingsScreen(
+                        availableCameras = availableCameras,
+                        selectedCamera = selectedCamera,
                         availableResolutions = availableResolutions,
                         selectedResolution = selectedResolution,
                         selectedPort = selectedPort,
-                        onStartStreaming = { startStreaming() },
-                        onStopStreaming = { stopStreaming() },
+                        onCameraChanged = { camera ->
+                            selectedCamera = camera
+                            cameraService.setCamera(camera)
+                            // Save the new camera
+                            appPreferences.saveCamera(camera)
+                            // Update available resolutions for the new camera
+                            availableResolutions = cameraService.getAvailableResolutions()
+                            // Reset to default resolution for the new camera
+                            selectedResolution = cameraService.getCurrentResolution()
+                        },
                         onResolutionChanged = { resolution ->
                             selectedResolution = resolution
                             cameraService.setResolution(resolution)
@@ -83,8 +114,39 @@ class MainActivity : ComponentActivity() {
                             selectedPort = port
                             // Save the new port
                             appPreferences.savePort(port)
-                        }
-                    )
+                        },
+                        onNavigateBack = { showSettings = false }
+                    )                } else {
+                    Scaffold(
+                        modifier = Modifier.fillMaxSize(),
+                        topBar = {
+                            TopAppBar(
+                                title = { Text("NetLens") },
+                                actions = {
+                                    IconButton(
+                                        onClick = { showSettings = true },
+                                        enabled = !isStreaming
+                                    ) {
+                                        Icon(Icons.Default.Settings, contentDescription = "Settings")
+                                    }
+                                }
+                            )
+                        },
+                        contentWindowInsets = WindowInsets(0.dp) // Remove default insets to reduce space
+                    ) { innerPadding ->
+                        CameraStreamingUI(
+                            modifier = Modifier.padding(innerPadding),
+                            isStreaming = isStreaming,
+                            streamUrl = streamUrl,
+                            selectedResolution = selectedResolution,
+                            selectedPort = selectedPort,
+                            selectedCamera = selectedCamera,
+                            cameraService = if (::cameraService.isInitialized) cameraService else null,
+                            onStartStreaming = { startStreaming() },
+                            onStopStreaming = { stopStreaming() },
+                            onOpenSettings = { showSettings = true }
+                        )
+                    }
                 }
             }
         }
@@ -98,10 +160,42 @@ class MainActivity : ComponentActivity() {
         if (appPreferences.hasResolution()) {
             selectedResolution = appPreferences.getResolution()
         }
+        
+        // Load saved camera (will be applied after camera service is initialized)
+        if (appPreferences.hasCamera()) {
+            selectedCamera = appPreferences.getCamera()
+        }
     }
 
     private fun initializeCameraService() {
         cameraService = CameraStreamingService(this)
+        availableCameras = cameraService.getAvailableCameras()
+        
+        // Set initial orientation
+        val orientation = getDeviceOrientation()
+        cameraService.setOrientation(orientation)
+        
+        // Apply saved camera if available and valid
+        val savedCamera = selectedCamera
+        if (savedCamera != null) {
+            // Check if the saved camera is still available
+            val matchingCamera = availableCameras.find { 
+                it.id == savedCamera.id 
+            }
+            if (matchingCamera != null) {
+                selectedCamera = matchingCamera
+                cameraService.setCamera(matchingCamera)
+            } else {
+                // Fallback to first available camera if saved camera is no longer available
+                selectedCamera = availableCameras.firstOrNull()
+                selectedCamera?.let { cameraService.setCamera(it) }
+            }
+        } else {
+            // No saved camera, use first available
+            selectedCamera = availableCameras.firstOrNull()
+            selectedCamera?.let { cameraService.setCamera(it) }
+        }
+        
         availableResolutions = cameraService.getAvailableResolutions()
         
         // Apply saved resolution if available and valid
@@ -125,18 +219,45 @@ class MainActivity : ComponentActivity() {
 
     private fun startStreaming() {
         if (::cameraService.isInitialized) {
-            val port = selectedPort.toIntOrNull() ?: 8082
-            cameraService.startStreaming(port)
-            isStreaming = true
-            streamUrl = "http://${getLocalIpAddress()}:${port}/stream"
+            try {
+                val port = selectedPort.toIntOrNull() ?: 8082
+                val orientation = getDeviceOrientation()
+                cameraService.setOrientation(orientation)
+                cameraService.startStreaming(port)
+                isStreaming = true
+                val localIp = getLocalIpAddress()
+                streamUrl = "http://${localIp}:${port}/stream"
+                Log.d("MainActivity", "Started streaming on port $port with orientation $orientation")
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Error starting streaming", e)
+                isStreaming = false
+                streamUrl = ""
+            }
         }
     }
 
     private fun stopStreaming() {
         if (::cameraService.isInitialized) {
-            cameraService.stopStreaming()
-            isStreaming = false
-            streamUrl = ""
+            try {
+                cameraService.stopStreaming()
+                isStreaming = false
+                streamUrl = ""
+                Log.d("MainActivity", "Stopped streaming")
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Error stopping streaming", e)
+                isStreaming = false
+                streamUrl = ""
+            }
+        }
+    }
+
+    internal fun getDeviceOrientation(): Int {
+        return when (windowManager.defaultDisplay.rotation) {
+            Surface.ROTATION_0 -> 0    // Portrait
+            Surface.ROTATION_90 -> 90  // Landscape (rotated 90 degrees counter-clockwise)
+            Surface.ROTATION_180 -> 180 // Portrait (upside down)
+            Surface.ROTATION_270 -> 270 // Landscape (rotated 90 degrees clockwise)
+            else -> 0
         }
     }
 
@@ -145,6 +266,21 @@ class MainActivity : ComponentActivity() {
             .flatMap { it.inetAddresses.toList() }
             .find { !it.isLoopbackAddress && it.address.size == 4 }
             ?.hostAddress ?: "localhost"
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        
+        // Update orientation when configuration changes
+        if (::cameraService.isInitialized) {
+            try {
+                val orientation = getDeviceOrientation()
+                cameraService.setOrientation(orientation)
+                Log.d("MainActivity", "Orientation changed to: $orientation")
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Error updating orientation", e)
+            }
+        }
     }
 
     override fun onDestroy() {
@@ -161,166 +297,166 @@ fun CameraStreamingUI(
     modifier: Modifier = Modifier,
     isStreaming: Boolean,
     streamUrl: String,
-    availableResolutions: List<Resolution>,
     selectedResolution: Resolution?,
     selectedPort: String,
+    selectedCamera: CameraInfo?,
+    cameraService: CameraStreamingService?,
     onStartStreaming: () -> Unit,
     onStopStreaming: () -> Unit,
-    onResolutionChanged: (Resolution) -> Unit,
-    onPortChanged: (String) -> Unit
+    onOpenSettings: () -> Unit
 ) {
-    var showResolutionDropdown by remember { mutableStateOf(false) }
+    val scrollState = rememberScrollState()
+    val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    
+    // Track orientation changes and update camera service
+    LaunchedEffect(configuration.orientation) {
+        try {
+            if (context is MainActivity) {
+                val orientation = context.getDeviceOrientation()
+                cameraService?.setOrientation(orientation)
+            }
+        } catch (e: Exception) {
+            Log.e("CameraStreamingUI", "Error updating orientation in LaunchedEffect", e)
+        }
+    }
 
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(16.dp),
+            .verticalScroll(scrollState)
+            .padding(horizontal = 16.dp, vertical = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Text(
-            text = "NetLens Camera Streaming",
-            style = MaterialTheme.typography.headlineMedium
-        )
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        // Resolution Selection
-        if (availableResolutions.isNotEmpty()) {
+            // Settings and Status Display
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                border = if (isStreaming) BorderStroke(2.dp, Color(0xFF4CAF50)) else null
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp)
                 ) {
                     Text(
-                        text = "Resolution",
-                        style = MaterialTheme.typography.titleMedium
+                        text = if (isStreaming) "Streaming Active" else "Current Settings",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = if (isStreaming) Color(0xFF4CAF50) else MaterialTheme.colorScheme.onSurface
                     )
-
                     Spacer(modifier = Modifier.height(8.dp))
-
-                    ExposedDropdownMenuBox(
-                        expanded = showResolutionDropdown,
-                        onExpandedChange = { showResolutionDropdown = !showResolutionDropdown }
-                    ) {
-                        OutlinedTextField(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .menuAnchor(),
-                            readOnly = true,
-                            value = selectedResolution?.toString() ?: "Select Resolution",
-                            onValueChange = {},
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = showResolutionDropdown) }
+                    
+                    if (isStreaming && streamUrl.isNotEmpty()) {
+                        Text(
+                            text = "Stream URL:",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
                         )
-
-                        ExposedDropdownMenu(
-                            expanded = showResolutionDropdown,
-                            onDismissRequest = { showResolutionDropdown = false }
-                        ) {
-                            availableResolutions.forEach { resolution ->
-                                DropdownMenuItem(
-                                    text = { Text(resolution.toString()) },
-                                    onClick = {
-                                        onResolutionChanged(resolution)
-                                        showResolutionDropdown = false
-                                    },
-                                    contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
-                                )
+                        Text(
+                            text = streamUrl,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    
+                    Text(
+                        text = buildAnnotatedString {
+                            withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
+                                append("Camera: ")
                             }
-                        }
-                    }
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Port Configuration
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp)
-            ) {
-                Text(
-                    text = "Server Port",
-                    style = MaterialTheme.typography.titleMedium
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                OutlinedTextField(
-                    modifier = Modifier.fillMaxWidth(),
-                    value = selectedPort,
-                    onValueChange = { newPort ->
-                        // Only allow numbers and limit to reasonable port range
-                        if (newPort.all { it.isDigit() } && newPort.length <= 5) {
-                            onPortChanged(newPort)
-                        }
-                    },
-                    label = { Text("Port Number") },
-                    placeholder = { Text("8082") },
-                    enabled = !isStreaming,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    isError = selectedPort.toIntOrNull()?.let { it < 1024 || it > 65535 } ?: true,
-                    supportingText = {
-                        if (selectedPort.toIntOrNull()?.let { it < 1024 || it > 65535 } == true) {
-                            Text("Port must be between 1024 and 65535")
-                        } else if (selectedPort.isEmpty()) {
-                            Text("Port is required")
-                        }
-                    }
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        if (isStreaming) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp)
-                ) {
-                    Text(
-                        text = "Streaming Active",
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Stream URL:",
+                            append(selectedCamera?.toString() ?: "Not selected")
+                        },
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Text(
-                        text = streamUrl,
-                        style = MaterialTheme.typography.bodySmall
+                        text = buildAnnotatedString {
+                            withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
+                                append("Resolution: ")
+                            }
+                            append(selectedResolution?.toString() ?: "Not selected")
+                        },
+                        style = MaterialTheme.typography.bodyMedium
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Resolution: ${selectedResolution?.toString() ?: "Unknown"}",
-                        style = MaterialTheme.typography.bodySmall
+                        text = buildAnnotatedString {
+                            withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
+                                append("Port: ")
+                            }
+                            append(selectedPort)
+                        },
+                        style = MaterialTheme.typography.bodyMedium
                     )
-                    Text(
-                        text = "Port: ${selectedPort}",
-                        style = MaterialTheme.typography.bodySmall
+                }
+            }
+
+            Button( 
+                onClick = if (isStreaming) onStopStreaming else onStartStreaming,
+                modifier = Modifier.fillMaxWidth(),
+                enabled = selectedResolution != null && selectedPort.toIntOrNull()?.let { it in 1024..65535 } == true,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isStreaming) Color.Red else Color(0xFF4CAF50),
+                    contentColor = Color.White
+                )
+            ) {
+                Text(if (isStreaming) "STOP STREAMING" else "START STREAMING")
+            }
+
+            // Made with love attribution
+            Text(
+                text = "Made with ❤️ by Florin Stroe",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+
+            // Camera Stream Display - Only show when streaming
+            if (isStreaming && streamUrl.isNotEmpty()) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(
+                            if (configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
+                                16f / 9f  // Landscape aspect ratio
+                            } else {
+                                9f / 16f  // Portrait aspect ratio
+                            }
+                        ),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    // Display the actual camera stream in a WebView
+                    AndroidView(
+                        factory = { ctx ->
+                            WebView(ctx).apply {
+                                webViewClient = WebViewClient()
+                                settings.apply {
+                                    javaScriptEnabled = true
+                                    domStorageEnabled = true
+                                    loadWithOverviewMode = true
+                                    useWideViewPort = true
+                                    builtInZoomControls = false
+                                    displayZoomControls = false
+                                    allowContentAccess = true
+                                    allowFileAccess = true
+                                    mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                                    // Enable auto-fit content to viewport
+                                    layoutAlgorithm = android.webkit.WebSettings.LayoutAlgorithm.SINGLE_COLUMN
+                                    // Disable cache to ensure fresh content on orientation change
+                                    cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
+                                }
+                            }
+                        },
+                        update = { webView ->
+                            try {
+                                // Use localhost for WebView, but display actual IP in stream URL text
+                                val port = selectedPort.toIntOrNull() ?: 8082
+                                val localhostUrl = "http://localhost:${port}/stream"
+                                if (streamUrl.isNotEmpty()) {
+                                    webView.loadUrl(localhostUrl)
+                                }
+                            } catch (e: Exception) {
+                                Log.e("WebView", "Error loading stream URL", e)
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize()
                     )
                 }
             }
         }
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        Button(
-            onClick = if (isStreaming) onStopStreaming else onStartStreaming,
-            modifier = Modifier.fillMaxWidth(),
-            enabled = selectedResolution != null && selectedPort.toIntOrNull()?.let { it in 1024..65535 } == true
-        ) {
-            Text(if (isStreaming) "Stop Streaming" else "Start Streaming")
-        }
     }
-}

@@ -9,6 +9,7 @@ import android.os.HandlerThread
 import android.util.Log
 import android.util.Size
 import android.view.Surface
+import android.view.WindowManager
 import dev.stroe.netlens.server.MjpegHttpServer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,7 +19,11 @@ data class Resolution(val width: Int, val height: Int, val name: String) {
     override fun toString(): String = "$name (${width}x${height})"
 }
 
-class CameraStreamingService(private val context: Context) {
+data class CameraInfo(val id: String, val name: String, val facing: Int) {
+    override fun toString(): String = name
+}
+
+class CameraStreamingService(context: Context) {
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var imageReader: ImageReader? = null
@@ -27,17 +32,73 @@ class CameraStreamingService(private val context: Context) {
     private var mjpegServer: MjpegHttpServer? = null
     private var currentPort: Int = 8082
     private var currentResolution: Resolution = Resolution(1280, 720, "HD")
+    private var currentCameraId: String = ""
+    private var previewSurface: Surface? = null
+    private var deviceOrientation: Int = 0
 
     private val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+    private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val serviceScope = CoroutineScope(Dispatchers.IO)
 
     companion object {
         private const val TAG = "CameraStreamingService"
     }
 
+    fun getAvailableCameras(): List<CameraInfo> {
+        return try {
+            val frontCameraCount = mutableMapOf<Int, Int>()
+            val backCameraCount = mutableMapOf<Int, Int>()
+            
+            cameraManager.cameraIdList.map { cameraId ->
+                val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+                val facing = characteristics.get(CameraCharacteristics.LENS_FACING) ?: CameraCharacteristics.LENS_FACING_BACK
+                
+                val name = when (facing) {
+                    CameraCharacteristics.LENS_FACING_FRONT -> {
+                        val count = frontCameraCount.getOrDefault(facing, 0) + 1
+                        frontCameraCount[facing] = count
+                        if (count == 1) "Front Camera" else "Front Camera $count"
+                    }
+                    CameraCharacteristics.LENS_FACING_BACK -> {
+                        val count = backCameraCount.getOrDefault(facing, 0) + 1
+                        backCameraCount[facing] = count
+                        if (count == 1) "Back Camera" else "Back Camera $count"
+                    }
+                    else -> "Camera $cameraId"
+                }
+                CameraInfo(cameraId, name, facing)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting available cameras", e)
+            emptyList()
+        }
+    }
+
+    fun setCamera(cameraInfo: CameraInfo) {
+        currentCameraId = cameraInfo.id
+        Log.d(TAG, "Camera changed to: ${cameraInfo.name}")
+
+        // If streaming, restart with new camera
+        if (mjpegServer != null) {
+            serviceScope.launch {
+                Log.d(TAG, "Restarting streaming with new camera")
+                closeCamera()
+                openCamera(currentPort)
+            }
+        }
+    }
+
+    fun getCurrentCamera(): CameraInfo? {
+        return if (currentCameraId.isNotEmpty()) {
+            getAvailableCameras().find { it.id == currentCameraId }
+        } else {
+            getAvailableCameras().firstOrNull()
+        }
+    }
+
     fun getAvailableResolutions(): List<Resolution> {
         return try {
-            val cameraId = cameraManager.cameraIdList[0]
+            val cameraId = getCurrentCameraId()
             val characteristics = cameraManager.getCameraCharacteristics(cameraId)
             val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             val outputSizes = map?.getOutputSizes(ImageFormat.JPEG) ?: emptyArray()
@@ -45,10 +106,7 @@ class CameraStreamingService(private val context: Context) {
             val commonResolutions = listOf(
                 Resolution(1920, 1080, "Full HD"),
                 Resolution(1280, 720, "HD"),
-                Resolution(854, 480, "WVGA"),
-                Resolution(640, 480, "VGA"),
-                Resolution(352, 288, "CIF"),
-                Resolution(320, 240, "QVGA")
+                Resolution(854, 480, "WVGA")
             )
 
             commonResolutions.filter { resolution ->
@@ -56,8 +114,15 @@ class CameraStreamingService(private val context: Context) {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error getting available resolutions", e)
-            listOf(Resolution(640, 480, "VGA"))
+            listOf(Resolution(854, 480, "WVGA"))
         }
+    }
+
+    private fun getCurrentCameraId(): String {
+        if (currentCameraId.isEmpty()) {
+            currentCameraId = cameraManager.cameraIdList.firstOrNull() ?: "0"
+        }
+        return currentCameraId
     }
 
     fun setResolution(resolution: Resolution) {
@@ -75,6 +140,93 @@ class CameraStreamingService(private val context: Context) {
     }
 
     fun getCurrentResolution(): Resolution = currentResolution
+
+    fun setOrientation(orientation: Int) {
+        deviceOrientation = orientation
+        Log.d(TAG, "Device orientation changed to: $orientation")
+        
+        // Only restart if not currently streaming to avoid crashes
+        // If streaming, the orientation will be applied on next stream start
+        if (mjpegServer != null && cameraDevice != null) {
+            Log.d(TAG, "Updating orientation during active streaming")
+            // Update the capture request with new orientation without restarting camera
+            updateCaptureRequestOrientation()
+        }
+    }
+
+    private fun updateCaptureRequestOrientation() {
+        val surface = imageReader?.surface
+        
+        if (surface != null && cameraDevice != null && captureSession != null) {
+            try {
+                Log.d(TAG, "Updating capture request with new orientation")
+                val captureRequestBuilder = cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+                
+                captureRequestBuilder?.addTarget(surface)
+                
+                captureRequestBuilder?.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                captureRequestBuilder?.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                
+                // Set JPEG orientation based on device orientation and camera characteristics
+                val jpegOrientation = calculateJpegOrientation()
+                captureRequestBuilder?.set(CaptureRequest.JPEG_ORIENTATION, jpegOrientation)
+
+                captureSession?.setRepeatingRequest(
+                    captureRequestBuilder?.build()!!,
+                    object : CameraCaptureSession.CaptureCallback() {
+                        override fun onCaptureCompleted(
+                            session: CameraCaptureSession,
+                            request: CaptureRequest,
+                            result: TotalCaptureResult
+                        ) {
+                            // Log.d(TAG, "Capture completed with new orientation")
+                        }
+                    },
+                    backgroundHandler
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Error updating capture request orientation", e)
+            }
+        }
+    }
+
+    private fun calculateJpegOrientation(): Int {
+        val cameraId = getCurrentCameraId()
+        val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+        val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        val facing = characteristics.get(CameraCharacteristics.LENS_FACING) ?: CameraCharacteristics.LENS_FACING_BACK
+        
+        val rotation = windowManager.defaultDisplay.rotation
+        val degrees = when (rotation) {
+            Surface.ROTATION_0 -> 0
+            Surface.ROTATION_90 -> 90
+            Surface.ROTATION_180 -> 180
+            Surface.ROTATION_270 -> 270
+            else -> 0
+        }
+        
+        val jpegOrientation = if (facing == CameraCharacteristics.LENS_FACING_FRONT) {
+            // Front camera: mirror the orientation calculation
+            (sensorOrientation + degrees) % 360
+        } else {
+            // Back camera: normal orientation calculation
+            (sensorOrientation - degrees + 360) % 360
+        }
+        
+        Log.d(TAG, "Calculated JPEG orientation: $jpegOrientation (sensor: $sensorOrientation, device: $degrees, facing: ${if (facing == CameraCharacteristics.LENS_FACING_FRONT) "front" else "back"})")
+        return jpegOrientation
+    }
+
+    fun setPreviewSurface(surface: Surface) {
+        previewSurface = surface
+        // If camera is already open, restart session with preview
+        if (cameraDevice != null) {
+            serviceScope.launch {
+                closeCamera()
+                openCamera(currentPort)
+            }
+        }
+    }
 
     fun startStreaming(port: Int = 8082) {
         currentPort = port
@@ -115,12 +267,16 @@ class CameraStreamingService(private val context: Context) {
 
     private fun openCamera(port: Int = 8082) {
         try {
-            val cameraId = cameraManager.cameraIdList[0]
+            val cameraId = getCurrentCameraId()
             Log.d(TAG, "Opening camera: $cameraId")
 
             val characteristics = cameraManager.getCameraCharacteristics(cameraId)
             val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             val outputSizes = map?.getOutputSizes(ImageFormat.JPEG)
+            
+            // Get camera orientation
+            val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+            Log.d(TAG, "Camera sensor orientation: $sensorOrientation")
 
             // Use the selected resolution
             val size = outputSizes?.find {
@@ -160,13 +316,21 @@ class CameraStreamingService(private val context: Context) {
 
                 override fun onDisconnected(camera: CameraDevice) {
                     Log.d(TAG, "Camera disconnected")
-                    camera.close()
+                    try {
+                        camera.close()
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error closing disconnected camera", e)
+                    }
                     cameraDevice = null
                 }
 
                 override fun onError(camera: CameraDevice, error: Int) {
                     Log.e(TAG, "Camera error: $error")
-                    camera.close()
+                    try {
+                        camera.close()
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error closing camera with error", e)
+                    }
                     cameraDevice = null
                 }
             }, backgroundHandler)
@@ -177,8 +341,9 @@ class CameraStreamingService(private val context: Context) {
 
     private fun createCaptureSession() {
         val surface = imageReader?.surface
+        
         if (surface != null) {
-            Log.d(TAG, "Creating capture session")
+            Log.d(TAG, "Creating capture session for streaming only")
             cameraDevice?.createCaptureSession(
                 listOf(surface),
                 object : CameraCaptureSession.StateCallback() {
@@ -199,12 +364,19 @@ class CameraStreamingService(private val context: Context) {
 
     private fun startRepeatingRequest() {
         val surface = imageReader?.surface
+        
         if (surface != null) {
-            Log.d(TAG, "Starting repeating capture request")
-            val captureRequestBuilder = cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
+            Log.d(TAG, "Starting repeating capture request for streaming")
+            val captureRequestBuilder = cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+            
             captureRequestBuilder?.addTarget(surface)
+            
             captureRequestBuilder?.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
             captureRequestBuilder?.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+            
+            // Set JPEG orientation based on device orientation and camera characteristics
+            val jpegOrientation = calculateJpegOrientation()
+            captureRequestBuilder?.set(CaptureRequest.JPEG_ORIENTATION, jpegOrientation)
 
             captureSession?.setRepeatingRequest(
                 captureRequestBuilder?.build()!!,
@@ -234,12 +406,33 @@ class CameraStreamingService(private val context: Context) {
     }
 
     private fun closeCamera() {
-        captureSession?.close()
-        captureSession = null
-        cameraDevice?.close()
-        cameraDevice = null
-        imageReader?.close()
-        imageReader = null
-        Log.d(TAG, "Camera closed")
+        try {
+            captureSession?.close()
+            captureSession = null
+            cameraDevice?.close()
+            cameraDevice = null
+            imageReader?.close()
+            imageReader = null
+            Log.d(TAG, "Camera closed")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error closing camera", e)
+            captureSession = null
+            cameraDevice = null
+            imageReader = null
+        }
+    }
+    
+    fun getCameraOrientation(): Int {
+        return try {
+            if (currentCameraId.isNotEmpty()) {
+                val characteristics = cameraManager.getCameraCharacteristics(currentCameraId)
+                characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+            } else {
+                0
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting camera orientation", e)
+            0
+        }
     }
 }

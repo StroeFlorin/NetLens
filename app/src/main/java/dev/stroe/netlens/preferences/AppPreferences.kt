@@ -3,6 +3,8 @@ package dev.stroe.netlens.preferences
 import android.content.Context
 import android.content.SharedPreferences
 import dev.stroe.netlens.camera.Resolution
+import dev.stroe.netlens.camera.CameraInfo
+import androidx.core.content.edit
 
 class AppPreferences(context: Context) {
     private val preferences: SharedPreferences = context.getSharedPreferences(
@@ -15,6 +17,9 @@ class AppPreferences(context: Context) {
         private const val KEY_RESOLUTION_WIDTH = "resolution_width"
         private const val KEY_RESOLUTION_HEIGHT = "resolution_height"
         private const val KEY_RESOLUTION_NAME = "resolution_name"
+        private const val KEY_CAMERA_ID = "camera_id"
+        private const val KEY_CAMERA_NAME = "camera_name"
+        private const val KEY_CAMERA_FACING = "camera_facing"
         
         // Default values
         private const val DEFAULT_PORT = "8080"
@@ -24,7 +29,7 @@ class AppPreferences(context: Context) {
     }
 
     fun savePort(port: String) {
-        preferences.edit().putString(KEY_SELECTED_PORT, port).apply()
+        preferences.edit { putString(KEY_SELECTED_PORT, port) }
     }
 
     fun getPort(): String {
@@ -32,11 +37,11 @@ class AppPreferences(context: Context) {
     }
 
     fun saveResolution(resolution: Resolution) {
-        preferences.edit().apply {
+        preferences.edit {
             putInt(KEY_RESOLUTION_WIDTH, resolution.width)
             putInt(KEY_RESOLUTION_HEIGHT, resolution.height)
             putString(KEY_RESOLUTION_NAME, resolution.name)
-        }.apply()
+        }
     }
 
     fun getResolution(): Resolution {
@@ -51,5 +56,31 @@ class AppPreferences(context: Context) {
         return preferences.contains(KEY_RESOLUTION_WIDTH) && 
                preferences.contains(KEY_RESOLUTION_HEIGHT) && 
                preferences.contains(KEY_RESOLUTION_NAME)
+    }
+
+    fun saveCamera(cameraInfo: CameraInfo) {
+        preferences.edit {
+            putString(KEY_CAMERA_ID, cameraInfo.id)
+            putString(KEY_CAMERA_NAME, cameraInfo.name)
+            putInt(KEY_CAMERA_FACING, cameraInfo.facing)
+        }
+    }
+
+    fun getCamera(): CameraInfo? {
+        val id = preferences.getString(KEY_CAMERA_ID, null)
+        val name = preferences.getString(KEY_CAMERA_NAME, null)
+        val facing = preferences.getInt(KEY_CAMERA_FACING, -1)
+        
+        return if (id != null && name != null && facing != -1) {
+            CameraInfo(id, name, facing)
+        } else {
+            null
+        }
+    }
+
+    fun hasCamera(): Boolean {
+        return preferences.contains(KEY_CAMERA_ID) && 
+               preferences.contains(KEY_CAMERA_NAME) && 
+               preferences.contains(KEY_CAMERA_FACING)
     }
 }

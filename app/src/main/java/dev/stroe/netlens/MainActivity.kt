@@ -19,11 +19,13 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import dev.stroe.netlens.camera.CameraStreamingService
 import dev.stroe.netlens.camera.Resolution
+import dev.stroe.netlens.preferences.AppPreferences
 import dev.stroe.netlens.ui.theme.NetLensTheme
 import java.net.NetworkInterface
 
 class MainActivity : ComponentActivity() {
     private lateinit var cameraService: CameraStreamingService
+    private lateinit var appPreferences: AppPreferences
     private var isStreaming by mutableStateOf(false)
     private var streamUrl by mutableStateOf("")
     private var availableResolutions by mutableStateOf<List<Resolution>>(emptyList())
@@ -41,6 +43,12 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // Initialize preferences
+        appPreferences = AppPreferences(this)
+        
+        // Load saved settings
+        loadSettings()
 
         when {
             ContextCompat.checkSelfPermission(
@@ -68,9 +76,13 @@ class MainActivity : ComponentActivity() {
                         onResolutionChanged = { resolution ->
                             selectedResolution = resolution
                             cameraService.setResolution(resolution)
+                            // Save the new resolution
+                            appPreferences.saveResolution(resolution)
                         },
                         onPortChanged = { port ->
                             selectedPort = port
+                            // Save the new port
+                            appPreferences.savePort(port)
                         }
                     )
                 }
@@ -78,10 +90,37 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun loadSettings() {
+        // Load saved port
+        selectedPort = appPreferences.getPort()
+        
+        // Load saved resolution (will be applied after camera service is initialized)
+        if (appPreferences.hasResolution()) {
+            selectedResolution = appPreferences.getResolution()
+        }
+    }
+
     private fun initializeCameraService() {
         cameraService = CameraStreamingService(this)
         availableResolutions = cameraService.getAvailableResolutions()
-        selectedResolution = cameraService.getCurrentResolution()
+        
+        // Apply saved resolution if available and valid
+        val savedResolution = selectedResolution
+        if (savedResolution != null) {
+            // Check if the saved resolution is still available
+            val matchingResolution = availableResolutions.find { 
+                it.width == savedResolution.width && it.height == savedResolution.height 
+            }
+            if (matchingResolution != null) {
+                selectedResolution = matchingResolution
+                cameraService.setResolution(matchingResolution)
+            } else {
+                // Fallback to default if saved resolution is no longer available
+                selectedResolution = cameraService.getCurrentResolution()
+            }
+        } else {
+            selectedResolution = cameraService.getCurrentResolution()
+        }
     }
 
     private fun startStreaming() {

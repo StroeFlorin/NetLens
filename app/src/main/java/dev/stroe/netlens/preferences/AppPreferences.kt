@@ -17,7 +17,7 @@ class AppPreferences(context: Context) {
         private const val KEY_RESOLUTION_NAME = "resolution_name"
         
         // Default values
-        private const val DEFAULT_PORT = "8082"
+        private const val DEFAULT_PORT = "8080"
         private const val DEFAULT_RESOLUTION_WIDTH = 1280
         private const val DEFAULT_RESOLUTION_HEIGHT = 720
         private const val DEFAULT_RESOLUTION_NAME = "HD"

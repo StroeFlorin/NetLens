@@ -8,11 +8,13 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import dev.stroe.netlens.camera.CameraStreamingService
@@ -26,6 +28,7 @@ class MainActivity : ComponentActivity() {
     private var streamUrl by mutableStateOf("")
     private var availableResolutions by mutableStateOf<List<Resolution>>(emptyList())
     private var selectedResolution by mutableStateOf<Resolution?>(null)
+    private var selectedPort by mutableStateOf("8082")
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -59,11 +62,15 @@ class MainActivity : ComponentActivity() {
                         streamUrl = streamUrl,
                         availableResolutions = availableResolutions,
                         selectedResolution = selectedResolution,
+                        selectedPort = selectedPort,
                         onStartStreaming = { startStreaming() },
                         onStopStreaming = { stopStreaming() },
                         onResolutionChanged = { resolution ->
                             selectedResolution = resolution
                             cameraService.setResolution(resolution)
+                        },
+                        onPortChanged = { port ->
+                            selectedPort = port
                         }
                     )
                 }
@@ -79,9 +86,10 @@ class MainActivity : ComponentActivity() {
 
     private fun startStreaming() {
         if (::cameraService.isInitialized) {
-            cameraService.startStreaming()
+            val port = selectedPort.toIntOrNull() ?: 8082
+            cameraService.startStreaming(port)
             isStreaming = true
-            streamUrl = "http://${getLocalIpAddress()}:8082/stream"
+            streamUrl = "http://${getLocalIpAddress()}:${port}/stream"
         }
     }
 
@@ -116,9 +124,11 @@ fun CameraStreamingUI(
     streamUrl: String,
     availableResolutions: List<Resolution>,
     selectedResolution: Resolution?,
+    selectedPort: String,
     onStartStreaming: () -> Unit,
     onStopStreaming: () -> Unit,
-    onResolutionChanged: (Resolution) -> Unit
+    onResolutionChanged: (Resolution) -> Unit,
+    onPortChanged: (String) -> Unit
 ) {
     var showResolutionDropdown by remember { mutableStateOf(false) }
 
@@ -188,6 +198,48 @@ fun CameraStreamingUI(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        // Port Configuration
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp)
+            ) {
+                Text(
+                    text = "Server Port",
+                    style = MaterialTheme.typography.titleMedium
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                OutlinedTextField(
+                    modifier = Modifier.fillMaxWidth(),
+                    value = selectedPort,
+                    onValueChange = { newPort ->
+                        // Only allow numbers and limit to reasonable port range
+                        if (newPort.all { it.isDigit() } && newPort.length <= 5) {
+                            onPortChanged(newPort)
+                        }
+                    },
+                    label = { Text("Port Number") },
+                    placeholder = { Text("8082") },
+                    enabled = !isStreaming,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    isError = selectedPort.toIntOrNull()?.let { it < 1024 || it > 65535 } ?: true,
+                    supportingText = {
+                        if (selectedPort.toIntOrNull()?.let { it < 1024 || it > 65535 } == true) {
+                            Text("Port must be between 1024 and 65535")
+                        } else if (selectedPort.isEmpty()) {
+                            Text("Port is required")
+                        }
+                    }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         if (isStreaming) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -214,6 +266,10 @@ fun CameraStreamingUI(
                         text = "Resolution: ${selectedResolution?.toString() ?: "Unknown"}",
                         style = MaterialTheme.typography.bodySmall
                     )
+                    Text(
+                        text = "Port: ${selectedPort}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
             }
         }
@@ -223,7 +279,7 @@ fun CameraStreamingUI(
         Button(
             onClick = if (isStreaming) onStopStreaming else onStartStreaming,
             modifier = Modifier.fillMaxWidth(),
-            enabled = selectedResolution != null
+            enabled = selectedResolution != null && selectedPort.toIntOrNull()?.let { it in 1024..65535 } == true
         ) {
             Text(if (isStreaming) "Stop Streaming" else "Start Streaming")
         }

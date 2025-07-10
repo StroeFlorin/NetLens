@@ -25,6 +25,7 @@ class CameraStreamingService(private val context: Context) {
     private var backgroundHandler: Handler? = null
     private var backgroundThread: HandlerThread? = null
     private var mjpegServer: MjpegHttpServer? = null
+    private var currentPort: Int = 8082
     private var currentResolution: Resolution = Resolution(1280, 720, "HD")
 
     private val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -68,18 +69,19 @@ class CameraStreamingService(private val context: Context) {
             serviceScope.launch {
                 Log.d(TAG, "Restarting streaming with new resolution")
                 closeCamera()
-                openCamera()
+                openCamera(currentPort)
             }
         }
     }
 
     fun getCurrentResolution(): Resolution = currentResolution
 
-    fun startStreaming() {
+    fun startStreaming(port: Int = 8082) {
+        currentPort = port
         serviceScope.launch {
-            Log.d(TAG, "Starting camera streaming")
+            Log.d(TAG, "Starting camera streaming on port $port")
             startBackgroundThread()
-            openCamera()
+            openCamera(port)
             startHttpServer()
         }
     }
@@ -111,7 +113,7 @@ class CameraStreamingService(private val context: Context) {
         }
     }
 
-    private fun openCamera() {
+    private fun openCamera(port: Int = 8082) {
         try {
             val cameraId = cameraManager.cameraIdList[0]
             Log.d(TAG, "Opening camera: $cameraId")
@@ -129,7 +131,7 @@ class CameraStreamingService(private val context: Context) {
 
             imageReader = ImageReader.newInstance(size.width, size.height, ImageFormat.JPEG, 2)
             if (mjpegServer == null) {
-                mjpegServer = MjpegHttpServer(8082)
+                mjpegServer = MjpegHttpServer(port)
             }
 
             imageReader?.setOnImageAvailableListener({ reader ->

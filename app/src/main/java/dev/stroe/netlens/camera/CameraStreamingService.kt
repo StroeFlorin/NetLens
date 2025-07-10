@@ -3,7 +3,10 @@ package dev.stroe.netlens.camera
 import android.content.Context
 import android.graphics.ImageFormat
 import android.hardware.camera2.*
+import android.hardware.camera2.params.OutputConfiguration
+import android.hardware.camera2.params.SessionConfiguration
 import android.media.ImageReader
+import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
@@ -23,7 +26,7 @@ data class CameraInfo(val id: String, val name: String, val facing: Int) {
     override fun toString(): String = name
 }
 
-class CameraStreamingService(context: Context) {
+class CameraStreamingService(private val context: Context) {
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var imageReader: ImageReader? = null
@@ -33,7 +36,6 @@ class CameraStreamingService(context: Context) {
     private var currentPort: Int = 8082
     private var currentResolution: Resolution = Resolution(1280, 720, "HD")
     private var currentCameraId: String = ""
-    private var previewSurface: Surface? = null
     private var deviceOrientation: Int = 0
 
     private val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -85,14 +87,6 @@ class CameraStreamingService(context: Context) {
                 closeCamera()
                 openCamera(currentPort)
             }
-        }
-    }
-
-    fun getCurrentCamera(): CameraInfo? {
-        return if (currentCameraId.isNotEmpty()) {
-            getAvailableCameras().find { it.id == currentCameraId }
-        } else {
-            getAvailableCameras().firstOrNull()
         }
     }
 
@@ -196,7 +190,15 @@ class CameraStreamingService(context: Context) {
         val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
         val facing = characteristics.get(CameraCharacteristics.LENS_FACING) ?: CameraCharacteristics.LENS_FACING_BACK
         
-        val rotation = windowManager.defaultDisplay.rotation
+        val rotation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Use the modern API for Android 11 (API 30) and above
+            context.display.rotation
+        } else {
+            // Use the deprecated API for older versions
+            @Suppress("DEPRECATION")
+            windowManager.defaultDisplay.rotation
+        }
+        
         val degrees = when (rotation) {
             Surface.ROTATION_0 -> 0
             Surface.ROTATION_90 -> 90
@@ -215,17 +217,6 @@ class CameraStreamingService(context: Context) {
         
         Log.d(TAG, "Calculated JPEG orientation: $jpegOrientation (sensor: $sensorOrientation, device: $degrees, facing: ${if (facing == CameraCharacteristics.LENS_FACING_FRONT) "front" else "back"})")
         return jpegOrientation
-    }
-
-    fun setPreviewSurface(surface: Surface) {
-        previewSurface = surface
-        // If camera is already open, restart session with preview
-        if (cameraDevice != null) {
-            serviceScope.launch {
-                closeCamera()
-                openCamera(currentPort)
-            }
-        }
     }
 
     fun startStreaming(port: Int = 8082) {
@@ -344,21 +335,46 @@ class CameraStreamingService(context: Context) {
         
         if (surface != null) {
             Log.d(TAG, "Creating capture session for streaming only")
-            cameraDevice?.createCaptureSession(
-                listOf(surface),
-                object : CameraCaptureSession.StateCallback() {
-                    override fun onConfigured(session: CameraCaptureSession) {
-                        Log.d(TAG, "Capture session configured")
-                        captureSession = session
-                        startRepeatingRequest()
-                    }
+            
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                // Use the modern API for Android 9 (API 28) and above
+                val outputConfiguration = OutputConfiguration(surface)
+                val sessionConfiguration = SessionConfiguration(
+                    SessionConfiguration.SESSION_REGULAR,
+                    listOf(outputConfiguration),
+                    context.mainExecutor,
+                    object : CameraCaptureSession.StateCallback() {
+                        override fun onConfigured(session: CameraCaptureSession) {
+                            Log.d(TAG, "Capture session configured")
+                            captureSession = session
+                            startRepeatingRequest()
+                        }
 
-                    override fun onConfigureFailed(session: CameraCaptureSession) {
-                        Log.e(TAG, "Capture session configuration failed")
+                        override fun onConfigureFailed(session: CameraCaptureSession) {
+                            Log.e(TAG, "Capture session configuration failed")
+                        }
                     }
-                },
-                backgroundHandler
-            )
+                )
+                cameraDevice?.createCaptureSession(sessionConfiguration)
+            } else {
+                // Use the legacy API for older versions
+                @Suppress("DEPRECATION")
+                cameraDevice?.createCaptureSession(
+                    listOf(surface),
+                    object : CameraCaptureSession.StateCallback() {
+                        override fun onConfigured(session: CameraCaptureSession) {
+                            Log.d(TAG, "Capture session configured")
+                            captureSession = session
+                            startRepeatingRequest()
+                        }
+
+                        override fun onConfigureFailed(session: CameraCaptureSession) {
+                            Log.e(TAG, "Capture session configuration failed")
+                        }
+                    },
+                    backgroundHandler
+                )
+            }
         }
     }
 
@@ -419,20 +435,6 @@ class CameraStreamingService(context: Context) {
             captureSession = null
             cameraDevice = null
             imageReader = null
-        }
-    }
-    
-    fun getCameraOrientation(): Int {
-        return try {
-            if (currentCameraId.isNotEmpty()) {
-                val characteristics = cameraManager.getCameraCharacteristics(currentCameraId)
-                characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
-            } else {
-                0
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error getting camera orientation", e)
-            0
         }
     }
 }

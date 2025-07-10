@@ -1,6 +1,7 @@
 package dev.stroe.netlens
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.os.Bundle
@@ -13,7 +14,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
@@ -24,7 +24,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
@@ -143,8 +142,7 @@ class MainActivity : ComponentActivity() {
                             selectedCamera = selectedCamera,
                             cameraService = if (::cameraService.isInitialized) cameraService else null,
                             onStartStreaming = { startStreaming() },
-                            onStopStreaming = { stopStreaming() },
-                            onOpenSettings = { showSettings = true }
+                            onStopStreaming = { stopStreaming() }
                         )
                     }
                 }
@@ -252,7 +250,14 @@ class MainActivity : ComponentActivity() {
     }
 
     internal fun getDeviceOrientation(): Int {
-        return when (windowManager.defaultDisplay.rotation) {
+        val display = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            display
+        } else {
+            @Suppress("DEPRECATION")
+            windowManager.defaultDisplay
+        }
+        
+        return when (display?.rotation) {
             Surface.ROTATION_0 -> 0    // Portrait
             Surface.ROTATION_90 -> 90  // Landscape (rotated 90 degrees counter-clockwise)
             Surface.ROTATION_180 -> 180 // Portrait (upside down)
@@ -291,7 +296,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun CameraStreamingUI(
     modifier: Modifier = Modifier,
@@ -302,8 +307,7 @@ fun CameraStreamingUI(
     selectedCamera: CameraInfo?,
     cameraService: CameraStreamingService?,
     onStartStreaming: () -> Unit,
-    onStopStreaming: () -> Unit,
-    onOpenSettings: () -> Unit
+    onStopStreaming: () -> Unit
 ) {
     val scrollState = rememberScrollState()
     val context = LocalContext.current
@@ -436,7 +440,7 @@ fun CameraStreamingUI(
                                     allowFileAccess = true
                                     mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                                     // Enable auto-fit content to viewport
-                                    layoutAlgorithm = android.webkit.WebSettings.LayoutAlgorithm.SINGLE_COLUMN
+                                    layoutAlgorithm = android.webkit.WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING
                                     // Disable cache to ensure fresh content on orientation change
                                     cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
                                 }

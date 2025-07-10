@@ -6,10 +6,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -44,7 +43,7 @@ fun SettingsScreen(
                 title = { Text("Settings") },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
             )
@@ -81,7 +80,7 @@ fun SettingsScreen(
                             OutlinedTextField(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .menuAnchor(),
+                                    .menuAnchor(MenuAnchorType.PrimaryNotEditable),
                                 readOnly = true,
                                 value = selectedCamera?.toString() ?: "Select Camera",
                                 onValueChange = {},
@@ -131,7 +130,7 @@ fun SettingsScreen(
                             OutlinedTextField(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .menuAnchor(),
+                                    .menuAnchor(MenuAnchorType.PrimaryNotEditable),
                                 readOnly = true,
                                 value = selectedResolution?.toString() ?: "Select Resolution",
                                 onValueChange = {},

@@ -20,6 +20,7 @@ class AppPreferences(context: Context) {
         private const val KEY_CAMERA_ID = "camera_id"
         private const val KEY_CAMERA_NAME = "camera_name"
         private const val KEY_CAMERA_FACING = "camera_facing"
+        private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
         
         // Default values
         private const val DEFAULT_PORT = "8080"
@@ -82,5 +83,9 @@ class AppPreferences(context: Context) {
         return preferences.contains(KEY_CAMERA_ID) && 
                preferences.contains(KEY_CAMERA_NAME) && 
                preferences.contains(KEY_CAMERA_FACING)
+    }
+    
+    fun getKeepScreenOn(): Boolean {
+        return preferences.getBoolean(KEY_KEEP_SCREEN_ON, true) // Default to true
     }
 }

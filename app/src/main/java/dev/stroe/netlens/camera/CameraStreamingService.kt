@@ -99,8 +99,7 @@ class CameraStreamingService(private val context: Context) {
 
             val commonResolutions = listOf(
                 Resolution(1920, 1080, "Full HD"),
-                Resolution(1280, 720, "HD"),
-                Resolution(854, 480, "WVGA")
+                Resolution(1280, 720, "HD")
             )
 
             commonResolutions.filter { resolution ->
@@ -108,7 +107,7 @@ class CameraStreamingService(private val context: Context) {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error getting available resolutions", e)
-            listOf(Resolution(854, 480, "WVGA"))
+            listOf(Resolution(1280, 720, "HD"))
         }
     }
 

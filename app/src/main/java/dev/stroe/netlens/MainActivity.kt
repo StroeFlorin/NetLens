@@ -5,8 +5,10 @@ import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.os.Bundle
+import android.os.PowerManager
 import android.util.Log
 import android.view.Surface
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -45,6 +47,7 @@ import java.net.NetworkInterface
 class MainActivity : ComponentActivity() {
     private lateinit var cameraService: CameraStreamingService
     private lateinit var appPreferences: AppPreferences
+    private var wakeLock: PowerManager.WakeLock? = null
     private var isStreaming by mutableStateOf(false)
     private var streamUrl by mutableStateOf("")
     private var availableResolutions by mutableStateOf<List<Resolution>>(emptyList())
@@ -53,6 +56,7 @@ class MainActivity : ComponentActivity() {
     private var availableCameras by mutableStateOf<List<CameraInfo>>(emptyList())
     private var selectedCamera by mutableStateOf<CameraInfo?>(null)
     private var showSettings by mutableStateOf(false)
+    private var keepScreenOn by mutableStateOf(true)
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -163,6 +167,9 @@ class MainActivity : ComponentActivity() {
         if (appPreferences.hasCamera()) {
             selectedCamera = appPreferences.getCamera()
         }
+        
+        // Load keep screen on setting
+        keepScreenOn = appPreferences.getKeepScreenOn()
     }
 
     private fun initializeCameraService() {
@@ -221,6 +228,10 @@ class MainActivity : ComponentActivity() {
                 val port = selectedPort.toIntOrNull() ?: 8082
                 val orientation = getDeviceOrientation()
                 cameraService.setOrientation(orientation)
+                
+                // Acquire wake lock to prevent device from sleeping
+                acquireWakeLock()
+                
                 cameraService.startStreaming(port)
                 isStreaming = true
                 val localIp = getLocalIpAddress()
@@ -230,6 +241,8 @@ class MainActivity : ComponentActivity() {
                 Log.e("MainActivity", "Error starting streaming", e)
                 isStreaming = false
                 streamUrl = ""
+                // Release wake lock if streaming failed to start
+                releaseWakeLock()
             }
         }
     }
@@ -241,11 +254,56 @@ class MainActivity : ComponentActivity() {
                 isStreaming = false
                 streamUrl = ""
                 Log.d("MainActivity", "Stopped streaming")
+                
+                // Release wake lock when streaming stops
+                releaseWakeLock()
             } catch (e: Exception) {
                 Log.e("MainActivity", "Error stopping streaming", e)
                 isStreaming = false
                 streamUrl = ""
+                // Ensure wake lock is released even if stopping fails
+                releaseWakeLock()
             }
+        }
+    }
+
+    private fun acquireWakeLock() {
+        try {
+            val powerManager = getSystemService(POWER_SERVICE) as PowerManager
+            wakeLock = powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "NetLens::StreamingWakeLock"
+            )
+            
+            // Acquire wake lock with a timeout of 1 hour (3600000 ms)
+            // This ensures the OS will clean up the wake lock if the app doesn't properly release it
+            wakeLock?.acquire(3600000L) // 1 hour timeout
+            
+            // Keep screen on while streaming if the setting is enabled
+            if (keepScreenOn) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+            
+            Log.d("MainActivity", "Wake lock acquired with 1 hour timeout - device will stay awake during streaming")
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Error acquiring wake lock", e)
+        }
+    }
+    
+    private fun releaseWakeLock() {
+        try {
+            wakeLock?.let { lock ->
+                if (lock.isHeld) {
+                    lock.release()
+                    Log.d("MainActivity", "Wake lock released")
+                }
+            }
+            wakeLock = null
+            
+            // Remove keep screen on flag
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Error releasing wake lock", e)
         }
     }
 
@@ -292,6 +350,22 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
         if (::cameraService.isInitialized) {
             cameraService.stopStreaming()
+        }
+        // Ensure wake lock is released when activity is destroyed
+        releaseWakeLock()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // Keep streaming when app goes to background, but optionally release wake lock
+        // depending on your app's requirements. For now, we'll keep it active.
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Re-acquire wake lock if streaming is active and wake lock was lost
+        if (isStreaming && (wakeLock == null || !wakeLock!!.isHeld)) {
+            acquireWakeLock()
         }
     }
 }

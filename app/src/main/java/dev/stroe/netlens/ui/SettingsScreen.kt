@@ -15,6 +15,7 @@ import androidx.compose.ui.unit.dp
 import dev.stroe.netlens.camera.CameraInfo
 import dev.stroe.netlens.camera.Resolution
 import dev.stroe.netlens.camera.FPSSetting
+import dev.stroe.netlens.camera.QualitySetting
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -25,16 +26,20 @@ fun SettingsScreen(
     selectedResolution: Resolution?,
     availableFPS: List<FPSSetting>,
     selectedFPS: FPSSetting?,
+    availableQuality: List<QualitySetting>,
+    selectedQuality: QualitySetting?,
     selectedPort: String,
     onCameraChanged: (CameraInfo) -> Unit,
     onResolutionChanged: (Resolution) -> Unit,
     onFPSChanged: (FPSSetting) -> Unit,
+    onQualityChanged: (QualitySetting) -> Unit,
     onPortChanged: (String) -> Unit,
     onNavigateBack: () -> Unit
 ) {
     var showCameraDropdown by remember { mutableStateOf(false) }
     var showResolutionDropdown by remember { mutableStateOf(false) }
     var showFPSDropdown by remember { mutableStateOf(false) }
+    var showQualityDropdown by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
 
     // Handle system back button
@@ -201,6 +206,54 @@ fun SettingsScreen(
                                     onClick = {
                                         onFPSChanged(fps)
                                         showFPSDropdown = false
+                                    },
+                                    contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Quality Configuration
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp)
+                ) {
+                    Text(
+                        text = "Video Quality",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    ExposedDropdownMenuBox(
+                        expanded = showQualityDropdown,
+                        onExpandedChange = { showQualityDropdown = !showQualityDropdown }
+                    ) {
+                        OutlinedTextField(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                            readOnly = true,
+                            value = selectedQuality?.toString() ?: "Select Quality",
+                            onValueChange = {},
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = showQualityDropdown) }
+                        )
+
+                        ExposedDropdownMenu(
+                            expanded = showQualityDropdown,
+                            onDismissRequest = { showQualityDropdown = false }
+                        ) {
+                            availableQuality.forEach { quality ->
+                                DropdownMenuItem(
+                                    text = { Text(quality.toString()) },
+                                    onClick = {
+                                        onQualityChanged(quality)
+                                        showQualityDropdown = false
                                     },
                                     contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
                                 )

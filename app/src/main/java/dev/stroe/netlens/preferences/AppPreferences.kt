@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import dev.stroe.netlens.camera.Resolution
 import dev.stroe.netlens.camera.CameraInfo
 import dev.stroe.netlens.camera.FPSSetting
+import dev.stroe.netlens.camera.QualitySetting
 import androidx.core.content.edit
 
 class AppPreferences(context: Context) {
@@ -24,6 +25,8 @@ class AppPreferences(context: Context) {
         private const val KEY_FPS = "fps"
         private const val KEY_FPS_DELAY_MS = "fps_delay_ms"
         private const val KEY_FPS_NAME = "fps_name"
+        private const val KEY_QUALITY = "quality"
+        private const val KEY_QUALITY_NAME = "quality_name"
         private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
         
         // Default values
@@ -34,6 +37,8 @@ class AppPreferences(context: Context) {
         private const val DEFAULT_FPS = 30
         private const val DEFAULT_FPS_DELAY_MS = 33L
         private const val DEFAULT_FPS_NAME = "30 FPS"
+        private const val DEFAULT_QUALITY = 85
+        private const val DEFAULT_QUALITY_NAME = "High Quality (85%)"
     }
 
     fun savePort(port: String) {
@@ -112,6 +117,25 @@ class AppPreferences(context: Context) {
         return preferences.contains(KEY_FPS) && 
                preferences.contains(KEY_FPS_DELAY_MS) && 
                preferences.contains(KEY_FPS_NAME)
+    }
+
+    fun saveQuality(qualitySetting: QualitySetting) {
+        preferences.edit {
+            putInt(KEY_QUALITY, qualitySetting.quality)
+            putString(KEY_QUALITY_NAME, qualitySetting.name)
+        }
+    }
+
+    fun getQuality(): QualitySetting {
+        val quality = preferences.getInt(KEY_QUALITY, DEFAULT_QUALITY)
+        val name = preferences.getString(KEY_QUALITY_NAME, DEFAULT_QUALITY_NAME) ?: DEFAULT_QUALITY_NAME
+        
+        return QualitySetting(quality, name)
+    }
+
+    fun hasQuality(): Boolean {
+        return preferences.contains(KEY_QUALITY) && 
+               preferences.contains(KEY_QUALITY_NAME)
     }
     
     fun getKeepScreenOn(): Boolean {

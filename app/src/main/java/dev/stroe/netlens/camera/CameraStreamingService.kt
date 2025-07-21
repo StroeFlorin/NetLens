@@ -30,6 +30,10 @@ data class FPSSetting(val fps: Int, val delayMs: Long, val name: String) {
     override fun toString(): String = name
 }
 
+data class QualitySetting(val quality: Int, val name: String) {
+    override fun toString(): String = name
+}
+
 class CameraStreamingService(private val context: Context) {
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
@@ -40,6 +44,7 @@ class CameraStreamingService(private val context: Context) {
     private var currentPort: Int = 8082
     private var currentResolution: Resolution = Resolution(1280, 720, "HD")
     private var currentFPS: FPSSetting = AVAILABLE_FPS_SETTINGS[2] // Default to 30 FPS
+    private var currentQuality: QualitySetting = AVAILABLE_QUALITY_SETTINGS[2] // Default to High Quality (85%)
     private var currentCameraId: String = ""
     private var deviceOrientation: Int = 0
 
@@ -55,6 +60,13 @@ class CameraStreamingService(private val context: Context) {
             FPSSetting(24, 41, "24 FPS"),
             FPSSetting(30, 33, "30 FPS"),
             FPSSetting(60, 16, "60 FPS")
+        )
+        
+        val AVAILABLE_QUALITY_SETTINGS = listOf(
+            QualitySetting(50, "Low Quality (50%)"),
+            QualitySetting(70, "Medium Quality (70%)"),
+            QualitySetting(85, "High Quality (85%)"),
+            QualitySetting(95, "Maximum Quality (95%)")
         )
     }
 
@@ -171,6 +183,20 @@ class CameraStreamingService(private val context: Context) {
 
     fun getAvailableFPS(): List<FPSSetting> = AVAILABLE_FPS_SETTINGS
 
+    fun setQuality(qualitySetting: QualitySetting) {
+        currentQuality = qualitySetting
+        Log.d(TAG, "Quality changed to: ${qualitySetting.name}")
+        
+        // If streaming, update the capture request with new quality
+        if (mjpegServer != null && cameraDevice != null && captureSession != null) {
+            updateCaptureRequestQuality()
+        }
+    }
+
+    fun getCurrentQuality(): QualitySetting = currentQuality
+
+    fun getAvailableQuality(): List<QualitySetting> = AVAILABLE_QUALITY_SETTINGS
+
     private fun updateCaptureRequestOrientation() {
         val surface = imageReader?.surface
         
@@ -203,6 +229,45 @@ class CameraStreamingService(private val context: Context) {
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Error updating capture request orientation", e)
+            }
+        }
+    }
+
+    private fun updateCaptureRequestQuality() {
+        val surface = imageReader?.surface
+        
+        if (surface != null && cameraDevice != null && captureSession != null) {
+            try {
+                Log.d(TAG, "Updating capture request with new quality: ${currentQuality.quality}")
+                val captureRequestBuilder = cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+                
+                captureRequestBuilder?.addTarget(surface)
+                
+                captureRequestBuilder?.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                captureRequestBuilder?.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                
+                // Set JPEG quality
+                captureRequestBuilder?.set(CaptureRequest.JPEG_QUALITY, currentQuality.quality.toByte())
+                
+                // Set JPEG orientation based on device orientation and camera characteristics
+                val jpegOrientation = calculateJpegOrientation()
+                captureRequestBuilder?.set(CaptureRequest.JPEG_ORIENTATION, jpegOrientation)
+
+                captureSession?.setRepeatingRequest(
+                    captureRequestBuilder?.build()!!,
+                    object : CameraCaptureSession.CaptureCallback() {
+                        override fun onCaptureCompleted(
+                            session: CameraCaptureSession,
+                            request: CaptureRequest,
+                            result: TotalCaptureResult
+                        ) {
+                            // Log.d(TAG, "Capture completed with new quality")
+                        }
+                    },
+                    backgroundHandler
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Error updating capture request quality", e)
             }
         }
     }
@@ -412,6 +477,9 @@ class CameraStreamingService(private val context: Context) {
             
             captureRequestBuilder?.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
             captureRequestBuilder?.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+            
+            // Set JPEG quality
+            captureRequestBuilder?.set(CaptureRequest.JPEG_QUALITY, currentQuality.quality.toByte())
             
             // Set JPEG orientation based on device orientation and camera characteristics
             val jpegOrientation = calculateJpegOrientation()

@@ -58,7 +58,7 @@ class MainActivity : ComponentActivity() {
     private var streamUrl by mutableStateOf("")
     private var availableResolutions by mutableStateOf<List<Resolution>>(emptyList())
     private var selectedResolution by mutableStateOf<Resolution?>(null)
-    private var selectedPort by mutableStateOf("8082")
+    private var selectedPort by mutableStateOf("8080")
     private var availableCameras by mutableStateOf<List<CameraInfo>>(emptyList())
     private var selectedCamera by mutableStateOf<CameraInfo?>(null)
     private var availableFPS by mutableStateOf<List<FPSSetting>>(emptyList())

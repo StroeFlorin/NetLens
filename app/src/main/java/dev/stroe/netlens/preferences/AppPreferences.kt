@@ -6,6 +6,7 @@ import dev.stroe.netlens.camera.Resolution
 import dev.stroe.netlens.camera.CameraInfo
 import dev.stroe.netlens.camera.FPSSetting
 import dev.stroe.netlens.camera.QualitySetting
+import dev.stroe.netlens.camera.OrientationSetting
 import androidx.core.content.edit
 
 class AppPreferences(context: Context) {
@@ -27,6 +28,8 @@ class AppPreferences(context: Context) {
         private const val KEY_FPS_NAME = "fps_name"
         private const val KEY_QUALITY = "quality"
         private const val KEY_QUALITY_NAME = "quality_name"
+        private const val KEY_ORIENTATION_MODE = "orientation_mode"
+        private const val KEY_ORIENTATION_NAME = "orientation_name"
         private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
         
         // Default values
@@ -39,6 +42,8 @@ class AppPreferences(context: Context) {
         private const val DEFAULT_FPS_NAME = "30 FPS"
         private const val DEFAULT_QUALITY = 85
         private const val DEFAULT_QUALITY_NAME = "High Quality (85%)"
+        private const val DEFAULT_ORIENTATION_MODE = "AUTO"
+        private const val DEFAULT_ORIENTATION_NAME = "Auto (Follow Device)"
     }
 
     fun savePort(port: String) {
@@ -136,6 +141,25 @@ class AppPreferences(context: Context) {
     fun hasQuality(): Boolean {
         return preferences.contains(KEY_QUALITY) && 
                preferences.contains(KEY_QUALITY_NAME)
+    }
+    
+    fun saveOrientationSetting(orientationSetting: OrientationSetting) {
+        preferences.edit {
+            putString(KEY_ORIENTATION_MODE, orientationSetting.mode)
+            putString(KEY_ORIENTATION_NAME, orientationSetting.name)
+        }
+    }
+
+    fun getOrientationSetting(): OrientationSetting {
+        val mode = preferences.getString(KEY_ORIENTATION_MODE, DEFAULT_ORIENTATION_MODE) ?: DEFAULT_ORIENTATION_MODE
+        val name = preferences.getString(KEY_ORIENTATION_NAME, DEFAULT_ORIENTATION_NAME) ?: DEFAULT_ORIENTATION_NAME
+        
+        return OrientationSetting(mode, name)
+    }
+
+    fun hasOrientationSetting(): Boolean {
+        return preferences.contains(KEY_ORIENTATION_MODE) && 
+               preferences.contains(KEY_ORIENTATION_NAME)
     }
     
     fun getKeepScreenOn(): Boolean {

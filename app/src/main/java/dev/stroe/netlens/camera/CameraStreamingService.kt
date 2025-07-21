@@ -34,6 +34,16 @@ data class QualitySetting(val quality: Int, val name: String) {
     override fun toString(): String = name
 }
 
+data class OrientationSetting(val mode: String, val name: String) {
+    override fun toString(): String = name
+}
+
+enum class OrientationMode {
+    AUTO,
+    LANDSCAPE,
+    PORTRAIT
+}
+
 class CameraStreamingService(private val context: Context) {
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
@@ -45,8 +55,10 @@ class CameraStreamingService(private val context: Context) {
     private var currentResolution: Resolution = Resolution(1280, 720, "HD")
     private var currentFPS: FPSSetting = AVAILABLE_FPS_SETTINGS[2] // Default to 30 FPS
     private var currentQuality: QualitySetting = AVAILABLE_QUALITY_SETTINGS[2] // Default to High Quality (85%)
+    private var currentOrientation: OrientationSetting = AVAILABLE_ORIENTATION_SETTINGS[0] // Default to Auto
     private var currentCameraId: String = ""
     private var deviceOrientation: Int = 0
+    private var previewSurface: Surface? = null
 
     private val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -67,6 +79,12 @@ class CameraStreamingService(private val context: Context) {
             QualitySetting(70, "Medium Quality (70%)"),
             QualitySetting(85, "High Quality (85%)"),
             QualitySetting(95, "Maximum Quality (95%)")
+        )
+        
+        val AVAILABLE_ORIENTATION_SETTINGS = listOf(
+            OrientationSetting(OrientationMode.AUTO.name, "Auto (Follow Device)"),
+            OrientationSetting(OrientationMode.LANDSCAPE.name, "Force Landscape"),
+            OrientationSetting(OrientationMode.PORTRAIT.name, "Force Portrait")
         )
     }
 
@@ -108,6 +126,9 @@ class CameraStreamingService(private val context: Context) {
         if (mjpegServer != null) {
             serviceScope.launch {
                 Log.d(TAG, "Restarting streaming with new camera")
+                // Stop capture session first to prevent IllegalStateException
+                captureSession?.close()
+                captureSession = null
                 closeCamera()
                 openCamera(currentPort)
             }
@@ -150,6 +171,9 @@ class CameraStreamingService(private val context: Context) {
         if (mjpegServer != null) {
             serviceScope.launch {
                 Log.d(TAG, "Restarting streaming with new resolution")
+                // Stop capture session first to prevent IllegalStateException
+                captureSession?.close()
+                captureSession = null
                 closeCamera()
                 openCamera(currentPort)
             }
@@ -197,25 +221,60 @@ class CameraStreamingService(private val context: Context) {
 
     fun getAvailableQuality(): List<QualitySetting> = AVAILABLE_QUALITY_SETTINGS
 
+    fun setOrientationSetting(orientationSetting: OrientationSetting) {
+        currentOrientation = orientationSetting
+        Log.d(TAG, "Orientation setting changed to: ${orientationSetting.name}")
+        
+        // If streaming, update the capture request with new orientation
+        if (mjpegServer != null && cameraDevice != null && captureSession != null) {
+            updateCaptureRequestOrientation()
+        }
+    }
+
+    fun getCurrentOrientationSetting(): OrientationSetting = currentOrientation
+
+    fun getAvailableOrientationSettings(): List<OrientationSetting> = AVAILABLE_ORIENTATION_SETTINGS
+
+    fun setPreviewSurface(surface: Surface?) {
+        previewSurface = surface
+        Log.d(TAG, "Preview surface ${if (surface != null) "set" else "removed"}")
+        
+        // If streaming, restart camera session to include preview surface
+        if (mjpegServer != null && cameraDevice != null) {
+            serviceScope.launch {
+                Log.d(TAG, "Restarting camera session with preview surface")
+                createCaptureSession()
+            }
+        }
+    }
+
     private fun updateCaptureRequestOrientation() {
         val surface = imageReader?.surface
+        val currentCaptureSession = captureSession
+        val currentCameraDevice = cameraDevice
         
-        if (surface != null && cameraDevice != null && captureSession != null) {
+        if (surface != null && currentCameraDevice != null && currentCaptureSession != null) {
             try {
                 Log.d(TAG, "Updating capture request with new orientation")
-                val captureRequestBuilder = cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+                val captureRequestBuilder = currentCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
                 
-                captureRequestBuilder?.addTarget(surface)
+                // Add image reader surface
+                captureRequestBuilder.addTarget(surface)
                 
-                captureRequestBuilder?.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                captureRequestBuilder?.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                // Add preview surface if available
+                previewSurface?.let { 
+                    captureRequestBuilder.addTarget(it)
+                }
+                
+                captureRequestBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                captureRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
                 
                 // Set JPEG orientation based on device orientation and camera characteristics
                 val jpegOrientation = calculateJpegOrientation()
-                captureRequestBuilder?.set(CaptureRequest.JPEG_ORIENTATION, jpegOrientation)
+                captureRequestBuilder.set(CaptureRequest.JPEG_ORIENTATION, jpegOrientation)
 
-                captureSession?.setRepeatingRequest(
-                    captureRequestBuilder?.build()!!,
+                currentCaptureSession.setRepeatingRequest(
+                    captureRequestBuilder.build(),
                     object : CameraCaptureSession.CaptureCallback() {
                         override fun onCaptureCompleted(
                             session: CameraCaptureSession,
@@ -227,34 +286,46 @@ class CameraStreamingService(private val context: Context) {
                     },
                     backgroundHandler
                 )
+            } catch (e: IllegalStateException) {
+                Log.e(TAG, "Capture session was closed during orientation update", e)
             } catch (e: Exception) {
                 Log.e(TAG, "Error updating capture request orientation", e)
             }
+        } else {
+            Log.w(TAG, "Cannot update orientation - missing required components")
         }
     }
 
     private fun updateCaptureRequestQuality() {
         val surface = imageReader?.surface
+        val currentCaptureSession = captureSession
+        val currentCameraDevice = cameraDevice
         
-        if (surface != null && cameraDevice != null && captureSession != null) {
+        if (surface != null && currentCameraDevice != null && currentCaptureSession != null) {
             try {
                 Log.d(TAG, "Updating capture request with new quality: ${currentQuality.quality}")
-                val captureRequestBuilder = cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+                val captureRequestBuilder = currentCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
                 
-                captureRequestBuilder?.addTarget(surface)
+                // Add image reader surface
+                captureRequestBuilder.addTarget(surface)
                 
-                captureRequestBuilder?.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                captureRequestBuilder?.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                // Add preview surface if available
+                previewSurface?.let { 
+                    captureRequestBuilder.addTarget(it)
+                }
+                
+                captureRequestBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                captureRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
                 
                 // Set JPEG quality
-                captureRequestBuilder?.set(CaptureRequest.JPEG_QUALITY, currentQuality.quality.toByte())
+                captureRequestBuilder.set(CaptureRequest.JPEG_QUALITY, currentQuality.quality.toByte())
                 
                 // Set JPEG orientation based on device orientation and camera characteristics
                 val jpegOrientation = calculateJpegOrientation()
-                captureRequestBuilder?.set(CaptureRequest.JPEG_ORIENTATION, jpegOrientation)
+                captureRequestBuilder.set(CaptureRequest.JPEG_ORIENTATION, jpegOrientation)
 
-                captureSession?.setRepeatingRequest(
-                    captureRequestBuilder?.build()!!,
+                currentCaptureSession.setRepeatingRequest(
+                    captureRequestBuilder.build(),
                     object : CameraCaptureSession.CaptureCallback() {
                         override fun onCaptureCompleted(
                             session: CameraCaptureSession,
@@ -266,9 +337,13 @@ class CameraStreamingService(private val context: Context) {
                     },
                     backgroundHandler
                 )
+            } catch (e: IllegalStateException) {
+                Log.e(TAG, "Capture session was closed during quality update", e)
             } catch (e: Exception) {
                 Log.e(TAG, "Error updating capture request quality", e)
             }
+        } else {
+            Log.w(TAG, "Cannot update quality - missing required components")
         }
     }
 
@@ -278,13 +353,19 @@ class CameraStreamingService(private val context: Context) {
         val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
         val facing = characteristics.get(CameraCharacteristics.LENS_FACING) ?: CameraCharacteristics.LENS_FACING_BACK
         
-        val rotation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // Use the modern API for Android 11 (API 30) and above
-            context.display.rotation
-        } else {
-            // Use the deprecated API for older versions
-            @Suppress("DEPRECATION")
-            windowManager.defaultDisplay.rotation
+        // Determine the rotation based on orientation setting
+        val rotation = when (OrientationMode.valueOf(currentOrientation.mode)) {
+            OrientationMode.AUTO -> {
+                // Use device orientation
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    context.display.rotation
+                } else {
+                    @Suppress("DEPRECATION")
+                    windowManager.defaultDisplay.rotation
+                }
+            }
+            OrientationMode.LANDSCAPE -> Surface.ROTATION_90
+            OrientationMode.PORTRAIT -> Surface.ROTATION_0
         }
         
         val degrees = when (rotation) {
@@ -303,7 +384,7 @@ class CameraStreamingService(private val context: Context) {
             (sensorOrientation - degrees + 360) % 360
         }
         
-        Log.d(TAG, "Calculated JPEG orientation: $jpegOrientation (sensor: $sensorOrientation, device: $degrees, facing: ${if (facing == CameraCharacteristics.LENS_FACING_FRONT) "front" else "back"})")
+        Log.d(TAG, "Calculated JPEG orientation: $jpegOrientation (sensor: $sensorOrientation, device: $degrees, facing: ${if (facing == CameraCharacteristics.LENS_FACING_FRONT) "front" else "back"}, mode: ${currentOrientation.mode})")
         return jpegOrientation
     }
 
@@ -320,8 +401,9 @@ class CameraStreamingService(private val context: Context) {
     fun stopStreaming() {
         serviceScope.launch {
             Log.d(TAG, "Stopping camera streaming")
-            closeCamera()
+            // Stop in reverse order to prevent race conditions
             stopHttpServer()
+            closeCamera()
             stopBackgroundThread()
         }
     }
@@ -420,84 +502,131 @@ class CameraStreamingService(private val context: Context) {
 
     private fun createCaptureSession() {
         val surface = imageReader?.surface
+        val currentCameraDevice = cameraDevice
         
-        if (surface != null) {
-            Log.d(TAG, "Creating capture session for streaming only")
-            
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                // Use the modern API for Android 9 (API 28) and above
-                val outputConfiguration = OutputConfiguration(surface)
-                val sessionConfiguration = SessionConfiguration(
-                    SessionConfiguration.SESSION_REGULAR,
-                    listOf(outputConfiguration),
-                    context.mainExecutor,
-                    object : CameraCaptureSession.StateCallback() {
-                        override fun onConfigured(session: CameraCaptureSession) {
-                            Log.d(TAG, "Capture session configured")
-                            captureSession = session
-                            startRepeatingRequest()
-                        }
+        if (surface != null && currentCameraDevice != null) {
+            try {
+                Log.d(TAG, "Creating capture session for streaming and preview")
+                
+                // Create list of surfaces to include in session
+                val surfaces = mutableListOf<Surface>()
+                surfaces.add(surface) // Image reader surface for streaming
+                previewSurface?.let { 
+                    surfaces.add(it) // Preview surface for camera preview
+                    Log.d(TAG, "Added preview surface to capture session")
+                }
+                
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    // Use the modern API for Android 9 (API 28) and above
+                    val outputConfigurations = surfaces.map { OutputConfiguration(it) }
+                    val sessionConfiguration = SessionConfiguration(
+                        SessionConfiguration.SESSION_REGULAR,
+                        outputConfigurations,
+                        context.mainExecutor,
+                        object : CameraCaptureSession.StateCallback() {
+                            override fun onConfigured(session: CameraCaptureSession) {
+                                Log.d(TAG, "Capture session configured")
+                                // Ensure camera device is still valid before setting session
+                                if (cameraDevice != null) {
+                                    captureSession = session
+                                    startRepeatingRequest()
+                                } else {
+                                    Log.w(TAG, "Camera device became null during session configuration")
+                                    session.close()
+                                }
+                            }
 
-                        override fun onConfigureFailed(session: CameraCaptureSession) {
-                            Log.e(TAG, "Capture session configuration failed")
+                            override fun onConfigureFailed(session: CameraCaptureSession) {
+                                Log.e(TAG, "Capture session configuration failed")
+                                captureSession = null
+                            }
                         }
-                    }
-                )
-                cameraDevice?.createCaptureSession(sessionConfiguration)
-            } else {
-                // Use the legacy API for older versions
-                @Suppress("DEPRECATION")
-                cameraDevice?.createCaptureSession(
-                    listOf(surface),
-                    object : CameraCaptureSession.StateCallback() {
-                        override fun onConfigured(session: CameraCaptureSession) {
-                            Log.d(TAG, "Capture session configured")
-                            captureSession = session
-                            startRepeatingRequest()
-                        }
+                    )
+                    currentCameraDevice.createCaptureSession(sessionConfiguration)
+                } else {
+                    // Use the legacy API for older versions
+                    @Suppress("DEPRECATION")
+                    currentCameraDevice.createCaptureSession(
+                        surfaces,
+                        object : CameraCaptureSession.StateCallback() {
+                            override fun onConfigured(session: CameraCaptureSession) {
+                                Log.d(TAG, "Capture session configured")
+                                // Ensure camera device is still valid before setting session
+                                if (cameraDevice != null) {
+                                    captureSession = session
+                                    startRepeatingRequest()
+                                } else {
+                                    Log.w(TAG, "Camera device became null during session configuration")
+                                    session.close()
+                                }
+                            }
 
-                        override fun onConfigureFailed(session: CameraCaptureSession) {
-                            Log.e(TAG, "Capture session configuration failed")
-                        }
-                    },
-                    backgroundHandler
-                )
+                            override fun onConfigureFailed(session: CameraCaptureSession) {
+                                Log.e(TAG, "Capture session configuration failed")
+                                captureSession = null
+                            }
+                        },
+                        backgroundHandler
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error creating capture session", e)
+                captureSession = null
             }
+        } else {
+            Log.w(TAG, "Cannot create capture session - missing surface or camera device")
         }
     }
 
     private fun startRepeatingRequest() {
         val surface = imageReader?.surface
+        val currentCaptureSession = captureSession
+        val currentCameraDevice = cameraDevice
         
-        if (surface != null) {
-            Log.d(TAG, "Starting repeating capture request for streaming")
-            val captureRequestBuilder = cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
-            
-            captureRequestBuilder?.addTarget(surface)
-            
-            captureRequestBuilder?.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-            captureRequestBuilder?.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-            
-            // Set JPEG quality
-            captureRequestBuilder?.set(CaptureRequest.JPEG_QUALITY, currentQuality.quality.toByte())
-            
-            // Set JPEG orientation based on device orientation and camera characteristics
-            val jpegOrientation = calculateJpegOrientation()
-            captureRequestBuilder?.set(CaptureRequest.JPEG_ORIENTATION, jpegOrientation)
+        if (surface != null && currentCaptureSession != null && currentCameraDevice != null) {
+            try {
+                Log.d(TAG, "Starting repeating capture request for streaming and preview")
+                val captureRequestBuilder = currentCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+                
+                // Add image reader surface for streaming
+                captureRequestBuilder.addTarget(surface)
+                
+                // Add preview surface if available
+                previewSurface?.let { 
+                    captureRequestBuilder.addTarget(it)
+                    Log.d(TAG, "Added preview surface to capture request")
+                }
+                
+                captureRequestBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                captureRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                
+                // Set JPEG quality
+                captureRequestBuilder.set(CaptureRequest.JPEG_QUALITY, currentQuality.quality.toByte())
+                
+                // Set JPEG orientation based on device orientation and camera characteristics
+                val jpegOrientation = calculateJpegOrientation()
+                captureRequestBuilder.set(CaptureRequest.JPEG_ORIENTATION, jpegOrientation)
 
-            captureSession?.setRepeatingRequest(
-                captureRequestBuilder?.build()!!,
-                object : CameraCaptureSession.CaptureCallback() {
-                    override fun onCaptureCompleted(
-                        session: CameraCaptureSession,
-                        request: CaptureRequest,
-                        result: TotalCaptureResult
-                    ) {
-                        // Log.d(TAG, "Capture completed")
-                    }
-                },
-                backgroundHandler
-            )
+                currentCaptureSession.setRepeatingRequest(
+                    captureRequestBuilder.build(),
+                    object : CameraCaptureSession.CaptureCallback() {
+                        override fun onCaptureCompleted(
+                            session: CameraCaptureSession,
+                            request: CaptureRequest,
+                            result: TotalCaptureResult
+                        ) {
+                            // Log.d(TAG, "Capture completed")
+                        }
+                    },
+                    backgroundHandler
+                )
+            } catch (e: IllegalStateException) {
+                Log.e(TAG, "Capture session was closed before starting repeating request", e)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error starting repeating request", e)
+            }
+        } else {
+            Log.w(TAG, "Cannot start repeating request - missing required components: surface=$surface, captureSession=$currentCaptureSession, cameraDevice=$currentCameraDevice")
         }
     }
 

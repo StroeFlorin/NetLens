@@ -24,6 +24,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -34,13 +35,16 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import android.webkit.WebView
-import android.webkit.WebViewClient
+import android.view.SurfaceView
+import android.view.SurfaceHolder
 import dev.stroe.netlens.camera.CameraStreamingService
 import dev.stroe.netlens.camera.Resolution
 import dev.stroe.netlens.camera.CameraInfo
 import dev.stroe.netlens.camera.FPSSetting
 import dev.stroe.netlens.camera.QualitySetting
+import dev.stroe.netlens.camera.OrientationSetting
+import dev.stroe.netlens.camera.OrientationMode
+import android.content.pm.ActivityInfo
 import dev.stroe.netlens.preferences.AppPreferences
 import dev.stroe.netlens.ui.theme.NetLensTheme
 import dev.stroe.netlens.ui.SettingsScreen
@@ -54,13 +58,15 @@ class MainActivity : ComponentActivity() {
     private var streamUrl by mutableStateOf("")
     private var availableResolutions by mutableStateOf<List<Resolution>>(emptyList())
     private var selectedResolution by mutableStateOf<Resolution?>(null)
-    private var selectedPort by mutableStateOf("8082")
+    private var selectedPort by mutableStateOf("8080")
     private var availableCameras by mutableStateOf<List<CameraInfo>>(emptyList())
     private var selectedCamera by mutableStateOf<CameraInfo?>(null)
     private var availableFPS by mutableStateOf<List<FPSSetting>>(emptyList())
     private var selectedFPS by mutableStateOf<FPSSetting?>(null)
     private var availableQuality by mutableStateOf<List<QualitySetting>>(emptyList())
     private var selectedQuality by mutableStateOf<QualitySetting?>(null)
+    private var availableOrientation by mutableStateOf<List<OrientationSetting>>(emptyList())
+    private var selectedOrientation by mutableStateOf<OrientationSetting?>(null)
     private var showSettings by mutableStateOf(false)
     private var keepScreenOn by mutableStateOf(true)
 
@@ -82,6 +88,8 @@ class MainActivity : ComponentActivity() {
         
         // Load saved settings
         loadSettings()
+        // Lock orientation based on saved setting
+        applyOrientationLock(selectedOrientation)
 
         when {
             ContextCompat.checkSelfPermission(
@@ -106,6 +114,8 @@ class MainActivity : ComponentActivity() {
                         selectedFPS = selectedFPS,
                         availableQuality = availableQuality,
                         selectedQuality = selectedQuality,
+                        availableOrientation = availableOrientation,
+                        selectedOrientation = selectedOrientation,
                         selectedPort = selectedPort,
                         onCameraChanged = { camera ->
                             selectedCamera = camera
@@ -134,6 +144,14 @@ class MainActivity : ComponentActivity() {
                             cameraService.setQuality(quality)
                             // Save the new quality
                             appPreferences.saveQuality(quality)
+                        },
+                        onOrientationChanged = { orientation ->
+                            selectedOrientation = orientation
+                            cameraService.setOrientationSetting(orientation)
+                            // Save the new orientation
+                            appPreferences.saveOrientationSetting(orientation)
+                            // Lock orientation immediately
+                            this@MainActivity.applyOrientationLock(orientation)
                         },
                         onPortChanged = { port ->
                             selectedPort = port
@@ -168,6 +186,7 @@ class MainActivity : ComponentActivity() {
                             selectedCamera = selectedCamera,
                             selectedFPS = selectedFPS,
                             selectedQuality = selectedQuality,
+                            selectedOrientation = selectedOrientation,
                             cameraService = if (::cameraService.isInitialized) cameraService else null,
                             onStartStreaming = { startStreaming() },
                             onStopStreaming = { stopStreaming() }
@@ -202,8 +221,21 @@ class MainActivity : ComponentActivity() {
             selectedQuality = appPreferences.getQuality()
         }
         
+        // Load saved orientation (will be applied after camera service is initialized)
+        if (appPreferences.hasOrientationSetting()) {
+            selectedOrientation = appPreferences.getOrientationSetting()
+        }
+        
         // Load keep screen on setting
         keepScreenOn = appPreferences.getKeepScreenOn()
+    }
+    // Apply activity orientation lock based on orientation setting
+    private fun applyOrientationLock(orientationSetting: OrientationSetting?) {
+        when (orientationSetting?.mode) {
+            OrientationMode.LANDSCAPE.name -> requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            OrientationMode.PORTRAIT.name -> requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            else -> requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
     }
 
     private fun initializeCameraService() {
@@ -295,6 +327,27 @@ class MainActivity : ComponentActivity() {
             }
         } else {
             selectedQuality = cameraService.getCurrentQuality()
+        }
+        
+        // Initialize available orientation settings
+        availableOrientation = cameraService.getAvailableOrientationSettings()
+        
+        // Apply saved orientation if available and valid
+        val savedOrientation = selectedOrientation
+        if (savedOrientation != null) {
+            // Check if the saved orientation is still available
+            val matchingOrientation = availableOrientation.find { 
+                it.mode == savedOrientation.mode 
+            }
+            if (matchingOrientation != null) {
+                selectedOrientation = matchingOrientation
+                cameraService.setOrientationSetting(matchingOrientation)
+            } else {
+                // Fallback to default if saved orientation is no longer available
+                selectedOrientation = cameraService.getCurrentOrientationSetting()
+            }
+        } else {
+            selectedOrientation = cameraService.getCurrentOrientationSetting()
         }
     }
 
@@ -457,6 +510,7 @@ fun CameraStreamingUI(
     selectedCamera: CameraInfo?,
     selectedFPS: FPSSetting?,
     selectedQuality: QualitySetting?,
+    selectedOrientation: OrientationSetting?,
     cameraService: CameraStreamingService?,
     onStartStreaming: () -> Unit,
     onStopStreaming: () -> Unit
@@ -485,6 +539,49 @@ fun CameraStreamingUI(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+            // Camera Stream Display - Only show when streaming
+            if (isStreaming && streamUrl.isNotEmpty()) {
+                // Calculate aspect ratio based ONLY on the camera resolution and orientation setting
+                // This ensures the preview maintains the correct ratio regardless of device orientation
+                val aspectRatio = selectedResolution?.let { resolution ->
+                    val orientationMode = selectedOrientation?.mode?.let { mode ->
+                        try { dev.stroe.netlens.camera.OrientationMode.valueOf(mode) }
+                        catch (e: Exception) { dev.stroe.netlens.camera.OrientationMode.AUTO }
+                    } ?: dev.stroe.netlens.camera.OrientationMode.AUTO
+
+                    when (orientationMode) {
+                        dev.stroe.netlens.camera.OrientationMode.LANDSCAPE -> resolution.width.toFloat() / resolution.height.toFloat()
+                        dev.stroe.netlens.camera.OrientationMode.PORTRAIT -> resolution.height.toFloat() / resolution.width.toFloat()
+                        dev.stroe.netlens.camera.OrientationMode.AUTO -> if (configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) resolution.width.toFloat() / resolution.height.toFloat() else resolution.height.toFloat() / resolution.width.toFloat()
+                    }
+                } ?: run { 4f / 3f }
+
+                Card(
+                    modifier = Modifier
+                        .let { modifier ->
+                            val orientationMode = selectedOrientation?.mode?.let { mode ->
+                                try { dev.stroe.netlens.camera.OrientationMode.valueOf(mode) }
+                                catch (e: Exception) { dev.stroe.netlens.camera.OrientationMode.AUTO }
+                            } ?: dev.stroe.netlens.camera.OrientationMode.AUTO
+
+                            val isDeviceLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+                            val shouldLimitWidth = when (orientationMode) {
+                                dev.stroe.netlens.camera.OrientationMode.PORTRAIT -> isDeviceLandscape
+                                dev.stroe.netlens.camera.OrientationMode.LANDSCAPE -> !isDeviceLandscape
+                                dev.stroe.netlens.camera.OrientationMode.AUTO -> false
+                            }
+
+                            if (shouldLimitWidth) modifier.fillMaxWidth(0.6f).aspectRatio(aspectRatio) else modifier.fillMaxWidth().aspectRatio(aspectRatio)
+                        },
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    CameraPreview(
+                        cameraService = cameraService,
+                        selectedOrientation = selectedOrientation,
+                        modifier = Modifier.padding(2.dp)
+                    )
+                }
+            }
             // Settings and Status Display
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -557,6 +654,15 @@ fun CameraStreamingUI(
                         },
                         style = MaterialTheme.typography.bodyMedium
                     )
+                    Text(
+                        text = buildAnnotatedString {
+                            withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
+                                append("Orientation: ")
+                            }
+                            append(selectedOrientation?.toString() ?: "Not selected")
+                        },
+                        style = MaterialTheme.typography.bodyMedium
+                    )
                 }
             }
 
@@ -579,58 +685,61 @@ fun CameraStreamingUI(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
-
-            // Camera Stream Display - Only show when streaming
-            if (isStreaming && streamUrl.isNotEmpty()) {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(
-                            if (configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
-                                16f / 9f  // Landscape aspect ratio
-                            } else {
-                                9f / 16f  // Portrait aspect ratio
-                            }
-                        ),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    // Display the actual camera stream in a WebView
-                    AndroidView(
-                        factory = { ctx ->
-                            WebView(ctx).apply {
-                                webViewClient = WebViewClient()
-                                settings.apply {
-                                    javaScriptEnabled = true
-                                    domStorageEnabled = true
-                                    loadWithOverviewMode = true
-                                    useWideViewPort = true
-                                    builtInZoomControls = false
-                                    displayZoomControls = false
-                                    allowContentAccess = true
-                                    allowFileAccess = true
-                                    mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                                    // Enable auto-fit content to viewport
-                                    layoutAlgorithm = android.webkit.WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING
-                                    // Disable cache to ensure fresh content on orientation change
-                                    cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
-                                }
-                            }
-                        },
-                        update = { webView ->
-                            try {
-                                // Use localhost for WebView, but display actual IP in stream URL text
-                                val port = selectedPort.toIntOrNull() ?: 8082
-                                val localhostUrl = "http://localhost:${port}/stream"
-                                if (streamUrl.isNotEmpty()) {
-                                    webView.loadUrl(localhostUrl)
-                                }
-                            } catch (e: Exception) {
-                                Log.e("WebView", "Error loading stream URL", e)
-                            }
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
-            }
         }
     }
+
+@Composable
+fun CameraPreview(
+    cameraService: CameraStreamingService?,
+    selectedOrientation: OrientationSetting?,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+
+    Box(
+        modifier = modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        AndroidView(
+            factory = { ctx ->
+                val surfaceView = SurfaceView(ctx)
+                // Lock preview buffer to the camera resolution to preserve aspect ratio
+                cameraService?.getCurrentResolution()?.let { res ->
+                    surfaceView.holder.setFixedSize(res.width, res.height)
+                }
+                
+                // Configure the surface view for proper scaling
+                surfaceView.holder.setKeepScreenOn(true)
+                
+                surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
+                    override fun surfaceCreated(holder: SurfaceHolder) {
+                        Log.d("CameraPreview", "Surface created")
+                        // Set the preview surface in the camera service
+                        cameraService?.setPreviewSurface(holder.surface)
+                    }
+
+                    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+                        Log.d("CameraPreview", "Surface changed: ${width}x${height}")
+                        // The surface size changed, which may happen during rotation
+                        // The camera service will handle orientation through capture requests
+                    }
+
+                    override fun surfaceDestroyed(holder: SurfaceHolder) {
+                        Log.d("CameraPreview", "Surface destroyed")
+                        // Remove the preview surface from the camera service
+                        cameraService?.setPreviewSurface(null)
+                    }
+                })
+                
+                surfaceView
+            },
+            update = { surfaceView ->
+                // No manual rotation needed - the Camera2 API handles orientation internally
+                // through the capture request JPEG_ORIENTATION setting in the camera service
+                Log.d("CameraPreview", "Preview updated for orientation: ${selectedOrientation?.mode}")
+            },
+            modifier = Modifier
+                .fillMaxSize() // Fill the parent size to match aspect ratio above
+        )
+    }
+}

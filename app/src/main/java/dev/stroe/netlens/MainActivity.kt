@@ -15,10 +15,15 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -82,6 +87,12 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        
+        // Hide system bars for immersive experience
+        window.setFlags(
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        )
 
         // Initialize preferences
         appPreferences = AppPreferences(this)
@@ -119,6 +130,13 @@ class MainActivity : ComponentActivity() {
                         selectedPort = selectedPort,
                         onCameraChanged = { camera ->
                             selectedCamera = camera
+                            // Stop current preview/streaming
+                            if (isStreaming) {
+                                cameraService.stopStreaming()
+                            } else {
+                                cameraService.stopPreviewOnly()
+                            }
+                            // Apply new camera settings
                             cameraService.setCamera(camera)
                             // Save the new camera
                             appPreferences.saveCamera(camera)
@@ -126,6 +144,10 @@ class MainActivity : ComponentActivity() {
                             availableResolutions = cameraService.getAvailableResolutions()
                             // Reset to default resolution for the new camera
                             selectedResolution = cameraService.getCurrentResolution()
+                            // Restart preview with new camera
+                            if (!isStreaming) {
+                                cameraService.startPreviewOnly()
+                            }
                         },
                         onResolutionChanged = { resolution ->
                             selectedResolution = resolution
@@ -160,38 +182,21 @@ class MainActivity : ComponentActivity() {
                         },
                         onNavigateBack = { showSettings = false }
                     )                } else {
-                    Scaffold(
-                        modifier = Modifier.fillMaxSize(),
-                        topBar = {
-                            TopAppBar(
-                                title = { Text("NetLens") },
-                                actions = {
-                                    IconButton(
-                                        onClick = { showSettings = true },
-                                        enabled = !isStreaming
-                                    ) {
-                                        Icon(Icons.Default.Settings, contentDescription = "Settings")
-                                    }
-                                }
-                            )
-                        },
-                        contentWindowInsets = WindowInsets(0.dp) // Remove default insets to reduce space
-                    ) { innerPadding ->
-                        CameraStreamingUI(
-                            modifier = Modifier.padding(innerPadding),
-                            isStreaming = isStreaming,
-                            streamUrl = streamUrl,
-                            selectedResolution = selectedResolution,
-                            selectedPort = selectedPort,
-                            selectedCamera = selectedCamera,
-                            selectedFPS = selectedFPS,
-                            selectedQuality = selectedQuality,
-                            selectedOrientation = selectedOrientation,
-                            cameraService = if (::cameraService.isInitialized) cameraService else null,
-                            onStartStreaming = { startStreaming() },
-                            onStopStreaming = { stopStreaming() }
-                        )
-                    }
+                    // Full-screen camera view with overlay controls
+                    FullScreenCameraUI(
+                        isStreaming = isStreaming,
+                        streamUrl = streamUrl,
+                        selectedResolution = selectedResolution,
+                        selectedPort = selectedPort,
+                        selectedCamera = selectedCamera,
+                        selectedFPS = selectedFPS,
+                        selectedQuality = selectedQuality,
+                        selectedOrientation = selectedOrientation,
+                        cameraService = if (::cameraService.isInitialized) cameraService else null,
+                        onStartStreaming = { startStreaming() },
+                        onStopStreaming = { stopStreaming() },
+                        onShowSettings = { showSettings = true }
+                    )
                 }
             }
         }
@@ -349,6 +354,9 @@ class MainActivity : ComponentActivity() {
         } else {
             selectedOrientation = cameraService.getCurrentOrientationSetting()
         }
+        
+        // Camera will be opened when preview surface is set or streaming starts
+        Log.d("MainActivity", "Camera service initialized - ready for preview")
     }
 
     private fun startStreaming() {
@@ -478,7 +486,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         if (::cameraService.isInitialized) {
-            cameraService.stopStreaming()
+            cameraService.shutdown()
         }
         // Ensure wake lock is released when activity is destroyed
         releaseWakeLock()
@@ -488,6 +496,7 @@ class MainActivity : ComponentActivity() {
         super.onPause()
         // Keep streaming when app goes to background, but optionally release wake lock
         // depending on your app's requirements. For now, we'll keep it active.
+        // Note: We don't stop the camera preview on pause to maintain streaming
     }
 
     override fun onResume() {
@@ -496,13 +505,15 @@ class MainActivity : ComponentActivity() {
         if (isStreaming && (wakeLock == null || !wakeLock!!.isHeld)) {
             acquireWakeLock()
         }
+        
+        // Camera will be managed by the CameraStreamingService
+        Log.d("MainActivity", "Activity resumed")
     }
 }
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun CameraStreamingUI(
-    modifier: Modifier = Modifier,
+fun FullScreenCameraUI(
     isStreaming: Boolean,
     streamUrl: String,
     selectedResolution: Resolution?,
@@ -513,9 +524,9 @@ fun CameraStreamingUI(
     selectedOrientation: OrientationSetting?,
     cameraService: CameraStreamingService?,
     onStartStreaming: () -> Unit,
-    onStopStreaming: () -> Unit
+    onStopStreaming: () -> Unit,
+    onShowSettings: () -> Unit
 ) {
-    val scrollState = rememberScrollState()
     val context = LocalContext.current
     val configuration = LocalConfiguration.current
     
@@ -527,165 +538,137 @@ fun CameraStreamingUI(
                 cameraService?.setOrientation(orientation)
             }
         } catch (e: Exception) {
-            Log.e("CameraStreamingUI", "Error updating orientation in LaunchedEffect", e)
+            Log.e("FullScreenCameraUI", "Error updating orientation in LaunchedEffect", e)
         }
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(scrollState)
-            .padding(horizontal = 16.dp, vertical = 16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+    Box(
+        modifier = Modifier.fillMaxSize()
     ) {
-            // Camera Stream Display - Only show when streaming
-            if (isStreaming && streamUrl.isNotEmpty()) {
-                // Calculate aspect ratio based ONLY on the camera resolution and orientation setting
-                // This ensures the preview maintains the correct ratio regardless of device orientation
-                val aspectRatio = selectedResolution?.let { resolution ->
-                    val orientationMode = selectedOrientation?.mode?.let { mode ->
-                        try { dev.stroe.netlens.camera.OrientationMode.valueOf(mode) }
-                        catch (e: Exception) { dev.stroe.netlens.camera.OrientationMode.AUTO }
-                    } ?: dev.stroe.netlens.camera.OrientationMode.AUTO
-
-                    when (orientationMode) {
-                        dev.stroe.netlens.camera.OrientationMode.LANDSCAPE -> resolution.width.toFloat() / resolution.height.toFloat()
-                        dev.stroe.netlens.camera.OrientationMode.PORTRAIT -> resolution.height.toFloat() / resolution.width.toFloat()
-                        dev.stroe.netlens.camera.OrientationMode.AUTO -> if (configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) resolution.width.toFloat() / resolution.height.toFloat() else resolution.height.toFloat() / resolution.width.toFloat()
-                    }
-                } ?: run { 4f / 3f }
-
-                Card(
-                    modifier = Modifier
-                        .let { modifier ->
-                            val orientationMode = selectedOrientation?.mode?.let { mode ->
-                                try { dev.stroe.netlens.camera.OrientationMode.valueOf(mode) }
-                                catch (e: Exception) { dev.stroe.netlens.camera.OrientationMode.AUTO }
-                            } ?: dev.stroe.netlens.camera.OrientationMode.AUTO
-
-                            val isDeviceLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-                            val shouldLimitWidth = when (orientationMode) {
-                                dev.stroe.netlens.camera.OrientationMode.PORTRAIT -> isDeviceLandscape
-                                dev.stroe.netlens.camera.OrientationMode.LANDSCAPE -> !isDeviceLandscape
-                                dev.stroe.netlens.camera.OrientationMode.AUTO -> false
-                            }
-
-                            if (shouldLimitWidth) modifier.fillMaxWidth(0.6f).aspectRatio(aspectRatio) else modifier.fillMaxWidth().aspectRatio(aspectRatio)
-                        },
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    CameraPreview(
-                        cameraService = cameraService,
-                        selectedOrientation = selectedOrientation,
-                        modifier = Modifier.padding(2.dp)
-                    )
-                }
-            }
-            // Settings and Status Display
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                border = if (isStreaming) BorderStroke(2.dp, Color(0xFF4CAF50)) else null
+        // Full-screen camera preview
+        CameraPreview(
+            cameraService = cameraService,
+            selectedOrientation = selectedOrientation,
+            modifier = Modifier.fillMaxSize()
+        )
+        
+        // Top overlay with status
+        Card(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .statusBarsPadding() // Add status bar padding
+                .padding(top = 24.dp, start = 16.dp, end = 16.dp, bottom = 16.dp)
+                .wrapContentWidth(), // Wrap content width instead of fixed percentage
+            colors = CardDefaults.cardColors(
+                containerColor = Color.Black.copy(alpha = 0.7f)
+            ),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(12.dp)
             ) {
-                Column(
-                    modifier = Modifier.padding(16.dp)
-                ) {
+                if (isStreaming) {
                     Text(
-                        text = if (isStreaming) "Streaming Active" else "Current Settings",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = if (isStreaming) Color(0xFF4CAF50) else MaterialTheme.colorScheme.onSurface
+                        text = "STREAMING",
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        color = Color(0xFF4CAF50)
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    
-                    if (isStreaming && streamUrl.isNotEmpty()) {
-                        Text(
-                            text = "Stream URL:",
-                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
-                        )
+                    if (streamUrl.isNotEmpty()) {
                         Text(
                             text = streamUrl,
-                            style = MaterialTheme.typography.bodySmall
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.White,
+                            maxLines = 1
                         )
                     }
-                    
+                } else {
                     Text(
-                        text = buildAnnotatedString {
-                            withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
-                                append("Camera: ")
-                            }
-                            append(selectedCamera?.toString() ?: "Not selected")
-                        },
-                        style = MaterialTheme.typography.bodyMedium
+                        text = "READY TO STREAM",
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        color = Color.White
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = selectedCamera?.toString() ?: "No camera",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.White.copy(alpha = 0.8f),
+                        maxLines = 1
                     )
                     Text(
-                        text = buildAnnotatedString {
-                            withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
-                                append("Resolution: ")
-                            }
-                            append(selectedResolution?.toString() ?: "Not selected")
-                        },
-                        style = MaterialTheme.typography.bodyMedium
+                        text = selectedResolution?.toString() ?: "No resolution",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.White.copy(alpha = 0.8f),
+                        maxLines = 1
                     )
                     Text(
-                        text = buildAnnotatedString {
-                            withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
-                                append("Port: ")
-                            }
-                            append(selectedPort)
-                        },
-                        style = MaterialTheme.typography.bodyMedium
+                        text = selectedFPS?.toString() ?: "No FPS",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.White.copy(alpha = 0.8f),
+                        maxLines = 1
                     )
                     Text(
-                        text = buildAnnotatedString {
-                            withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
-                                append("Frame Rate: ")
-                            }
-                            append(selectedFPS?.toString() ?: "Not selected")
-                        },
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Text(
-                        text = buildAnnotatedString {
-                            withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
-                                append("Video Quality: ")
-                            }
-                            append(selectedQuality?.toString() ?: "Not selected")
-                        },
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Text(
-                        text = buildAnnotatedString {
-                            withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
-                                append("Orientation: ")
-                            }
-                            append(selectedOrientation?.toString() ?: "Not selected")
-                        },
-                        style = MaterialTheme.typography.bodyMedium
+                        text = "Port: $selectedPort",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.White.copy(alpha = 0.8f),
+                        maxLines = 1
                     )
                 }
             }
-
-            Button( 
+        }
+        
+        // Settings button - always in top right
+        FloatingActionButton(
+            onClick = onShowSettings,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .statusBarsPadding() // Add status bar padding
+                .padding(top = 24.dp, start = 16.dp, end = 16.dp, bottom = 16.dp)
+                .size(48.dp),
+            containerColor = Color.Black.copy(alpha = 0.7f),
+            contentColor = Color.White,
+            elevation = FloatingActionButtonDefaults.elevation(0.dp)
+        ) {
+            Icon(
+                Icons.Default.Settings,
+                contentDescription = "Settings",
+                modifier = Modifier.size(24.dp)
+            )
+        }
+        
+        // Bottom overlay with streaming controls
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding() // Add navigation bar padding
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Start/Stop streaming button
+            FloatingActionButton(
                 onClick = if (isStreaming) onStopStreaming else onStartStreaming,
-                modifier = Modifier.fillMaxWidth(),
-                enabled = selectedResolution != null && selectedPort.toIntOrNull()?.let { it in 1024..65535 } == true,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isStreaming) Color.Red else Color(0xFF4CAF50),
-                    contentColor = Color.White
-                )
+                modifier = Modifier.size(64.dp),
+                containerColor = if (isStreaming) Color.Red else Color(0xFF4CAF50),
+                contentColor = Color.White,
+                elevation = FloatingActionButtonDefaults.elevation(8.dp)
             ) {
-                Text(if (isStreaming) "STOP STREAMING" else "START STREAMING")
+                Icon(
+                    if (isStreaming) Icons.Default.Close else Icons.Default.PlayArrow,
+                    contentDescription = if (isStreaming) "Stop Streaming" else "Start Streaming",
+                    modifier = Modifier.size(28.dp)
+                )
             }
-
+            
+            Spacer(modifier = Modifier.height(8.dp))
+            
             // Made with love attribution
             Text(
                 text = "Made with ❤️ by Florin Stroe",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = Color.White.copy(alpha = 0.7f),
                 textAlign = TextAlign.Center
             )
         }
+    }
     }
 
 @Composable
@@ -695,6 +678,18 @@ fun CameraPreview(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+
+    // Ensure camera service is ready when service becomes available
+    LaunchedEffect(cameraService) {
+        cameraService?.let {
+            try {
+                it.startPreviewOnly()
+                Log.d("CameraPreview", "Camera preview started")
+            } catch (e: Exception) {
+                Log.e("CameraPreview", "Error starting camera preview", e)
+            }
+        }
+    }
 
     Box(
         modifier = modifier.fillMaxSize(),
@@ -716,6 +711,7 @@ fun CameraPreview(
                         Log.d("CameraPreview", "Surface created")
                         // Set the preview surface in the camera service
                         cameraService?.setPreviewSurface(holder.surface)
+                        // Note: Camera will start when streaming begins
                     }
 
                     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
@@ -728,6 +724,8 @@ fun CameraPreview(
                         Log.d("CameraPreview", "Surface destroyed")
                         // Remove the preview surface from the camera service
                         cameraService?.setPreviewSurface(null)
+                        // Stop preview if not streaming
+                        cameraService?.stopPreviewOnly()
                     }
                 })
                 

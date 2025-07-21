@@ -246,6 +246,40 @@ class CameraStreamingService(private val context: Context) {
                 createCaptureSession()
             }
         }
+        // If not streaming but surface is available, start preview-only mode
+        else if (surface != null && cameraDevice == null) {
+            serviceScope.launch {
+                Log.d(TAG, "Starting preview-only mode")
+                startPreviewOnly()
+            }
+        }
+    }
+
+    fun startPreviewOnly() {
+        serviceScope.launch {
+            Log.d(TAG, "Starting camera preview only (no streaming)")
+            startBackgroundThread()
+            openCamera(8082, previewOnly = true)
+        }
+    }
+
+    fun stopPreviewOnly() {
+        if (mjpegServer == null) { // Only stop if not streaming
+            serviceScope.launch {
+                Log.d(TAG, "Stopping camera preview only")
+                closeCamera()
+                stopBackgroundThread()
+            }
+        }
+    }
+
+    fun shutdown() {
+        serviceScope.launch {
+            Log.d(TAG, "Shutting down camera service completely")
+            stopHttpServer()
+            closeCamera()
+            stopBackgroundThread()
+        }
     }
 
     private fun updateCaptureRequestOrientation() {
@@ -400,11 +434,34 @@ class CameraStreamingService(private val context: Context) {
 
     fun stopStreaming() {
         serviceScope.launch {
-            Log.d(TAG, "Stopping camera streaming")
+            Log.d(TAG, "Stopping camera streaming (keeping preview active)")
             // Stop in reverse order to prevent race conditions
             stopHttpServer()
-            closeCamera()
-            stopBackgroundThread()
+            
+            // Stop image capture but keep camera open for preview
+            stopImageCapture()
+            
+            // Don't close camera or stop background thread - keep for preview
+            Log.d(TAG, "Streaming stopped, preview continues")
+        }
+    }
+
+    private fun stopImageCapture() {
+        try {
+            Log.d(TAG, "Stopping image capture for streaming")
+            
+            // Close and clear the image reader
+            imageReader?.close()
+            imageReader = null
+            
+            // Recreate capture session with only preview surface
+            if (cameraDevice != null && previewSurface != null) {
+                createCaptureSession()
+            }
+            
+            Log.d(TAG, "Image capture stopped, preview-only session created")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping image capture", e)
         }
     }
 
@@ -426,10 +483,10 @@ class CameraStreamingService(private val context: Context) {
         }
     }
 
-    private fun openCamera(port: Int = 8082) {
+    private fun openCamera(port: Int = 8082, previewOnly: Boolean = false) {
         try {
             val cameraId = getCurrentCameraId()
-            Log.d(TAG, "Opening camera: $cameraId")
+            Log.d(TAG, "Opening camera: $cameraId (preview only: $previewOnly)")
 
             val characteristics = cameraManager.getCameraCharacteristics(cameraId)
             val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
@@ -446,27 +503,30 @@ class CameraStreamingService(private val context: Context) {
 
             Log.d(TAG, "Selected resolution: ${size.width}x${size.height}")
 
-            imageReader = ImageReader.newInstance(size.width, size.height, ImageFormat.JPEG, 2)
-            if (mjpegServer == null) {
-                mjpegServer = MjpegHttpServer(port, currentFPS.delayMs)
-            }
-
-            imageReader?.setOnImageAvailableListener({ reader ->
-                val image = reader.acquireLatestImage()
-                image?.let {
-                    try {
-                        val buffer = it.planes[0].buffer
-                        val bytes = ByteArray(buffer.remaining())
-                        buffer.get(bytes)
-                        Log.d(TAG, "Captured frame: ${bytes.size} bytes")
-                        mjpegServer?.updateFrame(bytes)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error processing image", e)
-                    } finally {
-                        it.close()
-                    }
+            // Only create ImageReader and MJPEG server if not preview-only
+            if (!previewOnly) {
+                imageReader = ImageReader.newInstance(size.width, size.height, ImageFormat.JPEG, 2)
+                if (mjpegServer == null) {
+                    mjpegServer = MjpegHttpServer(port, currentFPS.delayMs)
                 }
-            }, backgroundHandler)
+
+                imageReader?.setOnImageAvailableListener({ reader ->
+                    val image = reader.acquireLatestImage()
+                    image?.let {
+                        try {
+                            val buffer = it.planes[0].buffer
+                            val bytes = ByteArray(buffer.remaining())
+                            buffer.get(bytes)
+                            Log.d(TAG, "Captured frame: ${bytes.size} bytes")
+                            mjpegServer?.updateFrame(bytes)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error processing image", e)
+                        } finally {
+                            it.close()
+                        }
+                    }
+                }, backgroundHandler)
+            }
 
             cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
@@ -504,16 +564,26 @@ class CameraStreamingService(private val context: Context) {
         val surface = imageReader?.surface
         val currentCameraDevice = cameraDevice
         
-        if (surface != null && currentCameraDevice != null) {
+        if (currentCameraDevice != null) {
             try {
-                Log.d(TAG, "Creating capture session for streaming and preview")
+                Log.d(TAG, "Creating capture session for ${if (surface != null) "streaming and " else ""}preview")
                 
                 // Create list of surfaces to include in session
                 val surfaces = mutableListOf<Surface>()
-                surfaces.add(surface) // Image reader surface for streaming
+                
+                // Add image reader surface only if it exists (streaming mode)
+                surface?.let { surfaces.add(it) }
+                
+                // Add preview surface if available
                 previewSurface?.let { 
-                    surfaces.add(it) // Preview surface for camera preview
+                    surfaces.add(it) 
                     Log.d(TAG, "Added preview surface to capture session")
+                }
+                
+                // Ensure we have at least one surface
+                if (surfaces.isEmpty()) {
+                    Log.w(TAG, "No surfaces available for capture session")
+                    return
                 }
                 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -583,13 +653,13 @@ class CameraStreamingService(private val context: Context) {
         val currentCaptureSession = captureSession
         val currentCameraDevice = cameraDevice
         
-        if (surface != null && currentCaptureSession != null && currentCameraDevice != null) {
+        if (currentCaptureSession != null && currentCameraDevice != null) {
             try {
-                Log.d(TAG, "Starting repeating capture request for streaming and preview")
+                Log.d(TAG, "Starting repeating capture request for ${if (surface != null) "streaming and " else ""}preview")
                 val captureRequestBuilder = currentCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
                 
-                // Add image reader surface for streaming
-                captureRequestBuilder.addTarget(surface)
+                // Add image reader surface for streaming (if available)
+                surface?.let { captureRequestBuilder.addTarget(it) }
                 
                 // Add preview surface if available
                 previewSurface?.let { 
@@ -597,11 +667,19 @@ class CameraStreamingService(private val context: Context) {
                     Log.d(TAG, "Added preview surface to capture request")
                 }
                 
+                // Ensure we have at least one target
+                if (surface == null && previewSurface == null) {
+                    Log.w(TAG, "No targets available for capture request")
+                    return
+                }
+                
                 captureRequestBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
                 captureRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
                 
-                // Set JPEG quality
-                captureRequestBuilder.set(CaptureRequest.JPEG_QUALITY, currentQuality.quality.toByte())
+                // Set JPEG quality (only if streaming)
+                if (surface != null) {
+                    captureRequestBuilder.set(CaptureRequest.JPEG_QUALITY, currentQuality.quality.toByte())
+                }
                 
                 // Set JPEG orientation based on device orientation and camera characteristics
                 val jpegOrientation = calculateJpegOrientation()

@@ -34,6 +34,16 @@ data class QualitySetting(val quality: Int, val name: String) {
     override fun toString(): String = name
 }
 
+data class OrientationSetting(val mode: String, val name: String) {
+    override fun toString(): String = name
+}
+
+enum class OrientationMode {
+    AUTO,
+    LANDSCAPE,
+    PORTRAIT
+}
+
 class CameraStreamingService(private val context: Context) {
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
@@ -45,6 +55,7 @@ class CameraStreamingService(private val context: Context) {
     private var currentResolution: Resolution = Resolution(1280, 720, "HD")
     private var currentFPS: FPSSetting = AVAILABLE_FPS_SETTINGS[2] // Default to 30 FPS
     private var currentQuality: QualitySetting = AVAILABLE_QUALITY_SETTINGS[2] // Default to High Quality (85%)
+    private var currentOrientation: OrientationSetting = AVAILABLE_ORIENTATION_SETTINGS[0] // Default to Auto
     private var currentCameraId: String = ""
     private var deviceOrientation: Int = 0
 
@@ -67,6 +78,12 @@ class CameraStreamingService(private val context: Context) {
             QualitySetting(70, "Medium Quality (70%)"),
             QualitySetting(85, "High Quality (85%)"),
             QualitySetting(95, "Maximum Quality (95%)")
+        )
+        
+        val AVAILABLE_ORIENTATION_SETTINGS = listOf(
+            OrientationSetting(OrientationMode.AUTO.name, "Auto (Follow Device)"),
+            OrientationSetting(OrientationMode.LANDSCAPE.name, "Force Landscape"),
+            OrientationSetting(OrientationMode.PORTRAIT.name, "Force Portrait")
         )
     }
 
@@ -197,6 +214,20 @@ class CameraStreamingService(private val context: Context) {
 
     fun getAvailableQuality(): List<QualitySetting> = AVAILABLE_QUALITY_SETTINGS
 
+    fun setOrientationSetting(orientationSetting: OrientationSetting) {
+        currentOrientation = orientationSetting
+        Log.d(TAG, "Orientation setting changed to: ${orientationSetting.name}")
+        
+        // If streaming, update the capture request with new orientation
+        if (mjpegServer != null && cameraDevice != null && captureSession != null) {
+            updateCaptureRequestOrientation()
+        }
+    }
+
+    fun getCurrentOrientationSetting(): OrientationSetting = currentOrientation
+
+    fun getAvailableOrientationSettings(): List<OrientationSetting> = AVAILABLE_ORIENTATION_SETTINGS
+
     private fun updateCaptureRequestOrientation() {
         val surface = imageReader?.surface
         
@@ -278,13 +309,19 @@ class CameraStreamingService(private val context: Context) {
         val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
         val facing = characteristics.get(CameraCharacteristics.LENS_FACING) ?: CameraCharacteristics.LENS_FACING_BACK
         
-        val rotation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // Use the modern API for Android 11 (API 30) and above
-            context.display.rotation
-        } else {
-            // Use the deprecated API for older versions
-            @Suppress("DEPRECATION")
-            windowManager.defaultDisplay.rotation
+        // Determine the rotation based on orientation setting
+        val rotation = when (OrientationMode.valueOf(currentOrientation.mode)) {
+            OrientationMode.AUTO -> {
+                // Use device orientation
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    context.display.rotation
+                } else {
+                    @Suppress("DEPRECATION")
+                    windowManager.defaultDisplay.rotation
+                }
+            }
+            OrientationMode.LANDSCAPE -> Surface.ROTATION_90
+            OrientationMode.PORTRAIT -> Surface.ROTATION_0
         }
         
         val degrees = when (rotation) {
@@ -303,7 +340,7 @@ class CameraStreamingService(private val context: Context) {
             (sensorOrientation - degrees + 360) % 360
         }
         
-        Log.d(TAG, "Calculated JPEG orientation: $jpegOrientation (sensor: $sensorOrientation, device: $degrees, facing: ${if (facing == CameraCharacteristics.LENS_FACING_FRONT) "front" else "back"})")
+        Log.d(TAG, "Calculated JPEG orientation: $jpegOrientation (sensor: $sensorOrientation, device: $degrees, facing: ${if (facing == CameraCharacteristics.LENS_FACING_FRONT) "front" else "back"}, mode: ${currentOrientation.mode})")
         return jpegOrientation
     }
 

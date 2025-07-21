@@ -16,6 +16,7 @@ import dev.stroe.netlens.camera.CameraInfo
 import dev.stroe.netlens.camera.Resolution
 import dev.stroe.netlens.camera.FPSSetting
 import dev.stroe.netlens.camera.QualitySetting
+import dev.stroe.netlens.camera.OrientationSetting
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -28,11 +29,14 @@ fun SettingsScreen(
     selectedFPS: FPSSetting?,
     availableQuality: List<QualitySetting>,
     selectedQuality: QualitySetting?,
+    availableOrientation: List<OrientationSetting>,
+    selectedOrientation: OrientationSetting?,
     selectedPort: String,
     onCameraChanged: (CameraInfo) -> Unit,
     onResolutionChanged: (Resolution) -> Unit,
     onFPSChanged: (FPSSetting) -> Unit,
     onQualityChanged: (QualitySetting) -> Unit,
+    onOrientationChanged: (OrientationSetting) -> Unit,
     onPortChanged: (String) -> Unit,
     onNavigateBack: () -> Unit
 ) {
@@ -40,6 +44,7 @@ fun SettingsScreen(
     var showResolutionDropdown by remember { mutableStateOf(false) }
     var showFPSDropdown by remember { mutableStateOf(false) }
     var showQualityDropdown by remember { mutableStateOf(false) }
+    var showOrientationDropdown by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
 
     // Handle system back button
@@ -254,6 +259,54 @@ fun SettingsScreen(
                                     onClick = {
                                         onQualityChanged(quality)
                                         showQualityDropdown = false
+                                    },
+                                    contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Orientation Configuration
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp)
+                ) {
+                    Text(
+                        text = "Video Orientation",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    ExposedDropdownMenuBox(
+                        expanded = showOrientationDropdown,
+                        onExpandedChange = { showOrientationDropdown = !showOrientationDropdown }
+                    ) {
+                        OutlinedTextField(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                            readOnly = true,
+                            value = selectedOrientation?.toString() ?: "Select Orientation",
+                            onValueChange = {},
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = showOrientationDropdown) }
+                        )
+
+                        ExposedDropdownMenu(
+                            expanded = showOrientationDropdown,
+                            onDismissRequest = { showOrientationDropdown = false }
+                        ) {
+                            availableOrientation.forEach { orientation ->
+                                DropdownMenuItem(
+                                    text = { Text(orientation.toString()) },
+                                    onClick = {
+                                        onOrientationChanged(orientation)
+                                        showOrientationDropdown = false
                                     },
                                     contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
                                 )

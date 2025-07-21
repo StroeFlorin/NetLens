@@ -41,6 +41,7 @@ import dev.stroe.netlens.camera.Resolution
 import dev.stroe.netlens.camera.CameraInfo
 import dev.stroe.netlens.camera.FPSSetting
 import dev.stroe.netlens.camera.QualitySetting
+import dev.stroe.netlens.camera.OrientationSetting
 import dev.stroe.netlens.preferences.AppPreferences
 import dev.stroe.netlens.ui.theme.NetLensTheme
 import dev.stroe.netlens.ui.SettingsScreen
@@ -61,6 +62,8 @@ class MainActivity : ComponentActivity() {
     private var selectedFPS by mutableStateOf<FPSSetting?>(null)
     private var availableQuality by mutableStateOf<List<QualitySetting>>(emptyList())
     private var selectedQuality by mutableStateOf<QualitySetting?>(null)
+    private var availableOrientation by mutableStateOf<List<OrientationSetting>>(emptyList())
+    private var selectedOrientation by mutableStateOf<OrientationSetting?>(null)
     private var showSettings by mutableStateOf(false)
     private var keepScreenOn by mutableStateOf(true)
 
@@ -106,6 +109,8 @@ class MainActivity : ComponentActivity() {
                         selectedFPS = selectedFPS,
                         availableQuality = availableQuality,
                         selectedQuality = selectedQuality,
+                        availableOrientation = availableOrientation,
+                        selectedOrientation = selectedOrientation,
                         selectedPort = selectedPort,
                         onCameraChanged = { camera ->
                             selectedCamera = camera
@@ -134,6 +139,12 @@ class MainActivity : ComponentActivity() {
                             cameraService.setQuality(quality)
                             // Save the new quality
                             appPreferences.saveQuality(quality)
+                        },
+                        onOrientationChanged = { orientation ->
+                            selectedOrientation = orientation
+                            cameraService.setOrientationSetting(orientation)
+                            // Save the new orientation
+                            appPreferences.saveOrientationSetting(orientation)
                         },
                         onPortChanged = { port ->
                             selectedPort = port
@@ -200,6 +211,11 @@ class MainActivity : ComponentActivity() {
         // Load saved quality (will be applied after camera service is initialized)
         if (appPreferences.hasQuality()) {
             selectedQuality = appPreferences.getQuality()
+        }
+        
+        // Load saved orientation (will be applied after camera service is initialized)
+        if (appPreferences.hasOrientationSetting()) {
+            selectedOrientation = appPreferences.getOrientationSetting()
         }
         
         // Load keep screen on setting
@@ -295,6 +311,27 @@ class MainActivity : ComponentActivity() {
             }
         } else {
             selectedQuality = cameraService.getCurrentQuality()
+        }
+        
+        // Initialize available orientation settings
+        availableOrientation = cameraService.getAvailableOrientationSettings()
+        
+        // Apply saved orientation if available and valid
+        val savedOrientation = selectedOrientation
+        if (savedOrientation != null) {
+            // Check if the saved orientation is still available
+            val matchingOrientation = availableOrientation.find { 
+                it.mode == savedOrientation.mode 
+            }
+            if (matchingOrientation != null) {
+                selectedOrientation = matchingOrientation
+                cameraService.setOrientationSetting(matchingOrientation)
+            } else {
+                // Fallback to default if saved orientation is no longer available
+                selectedOrientation = cameraService.getCurrentOrientationSetting()
+            }
+        } else {
+            selectedOrientation = cameraService.getCurrentOrientationSetting()
         }
     }
 

@@ -166,6 +166,8 @@ class MainActivity : ComponentActivity() {
                             selectedResolution = selectedResolution,
                             selectedPort = selectedPort,
                             selectedCamera = selectedCamera,
+                            selectedFPS = selectedFPS,
+                            selectedQuality = selectedQuality,
                             cameraService = if (::cameraService.isInitialized) cameraService else null,
                             onStartStreaming = { startStreaming() },
                             onStopStreaming = { stopStreaming() }
@@ -453,6 +455,8 @@ fun CameraStreamingUI(
     selectedResolution: Resolution?,
     selectedPort: String,
     selectedCamera: CameraInfo?,
+    selectedFPS: FPSSetting?,
+    selectedQuality: QualitySetting?,
     cameraService: CameraStreamingService?,
     onStartStreaming: () -> Unit,
     onStopStreaming: () -> Unit
@@ -532,6 +536,24 @@ fun CameraStreamingUI(
                                 append("Port: ")
                             }
                             append(selectedPort)
+                        },
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        text = buildAnnotatedString {
+                            withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
+                                append("Frame Rate: ")
+                            }
+                            append(selectedFPS?.toString() ?: "Not selected")
+                        },
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        text = buildAnnotatedString {
+                            withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
+                                append("Video Quality: ")
+                            }
+                            append(selectedQuality?.toString() ?: "Not selected")
                         },
                         style = MaterialTheme.typography.bodyMedium
                     )

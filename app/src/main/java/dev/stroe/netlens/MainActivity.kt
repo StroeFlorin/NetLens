@@ -14,11 +14,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
@@ -29,13 +24,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -83,7 +74,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -190,7 +180,6 @@ class MainActivity : ComponentActivity() {
                         selectedPort = selectedPort,
                         selectedCamera = selectedCamera,
                         selectedFPS = selectedFPS,
-                        selectedQuality = selectedQuality,
                         selectedOrientation = selectedOrientation,
                         cameraService = if (::cameraService.isInitialized) cameraService else null,
                         onStartStreaming = { startStreaming() },
@@ -236,10 +225,18 @@ class MainActivity : ComponentActivity() {
     }
     // Apply activity orientation lock based on orientation setting
     private fun applyOrientationLock(orientationSetting: OrientationSetting?) {
-        when (orientationSetting?.mode) {
-            OrientationMode.LANDSCAPE.name -> requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-            OrientationMode.PORTRAIT.name -> requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-            else -> requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        requestedOrientation = when (orientationSetting?.mode) {
+            OrientationMode.LANDSCAPE.name -> {
+                ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            }
+
+            OrientationMode.PORTRAIT.name -> {
+                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            }
+
+            else -> {
+                ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            }
         }
     }
 
@@ -520,7 +517,6 @@ fun FullScreenCameraUI(
     selectedPort: String,
     selectedCamera: CameraInfo?,
     selectedFPS: FPSSetting?,
-    selectedQuality: QualitySetting?,
     selectedOrientation: OrientationSetting?,
     cameraService: CameraStreamingService?,
     onStartStreaming: () -> Unit,
@@ -677,7 +673,6 @@ fun CameraPreview(
     selectedOrientation: OrientationSetting?,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
 
     // Ensure camera service is ready when service becomes available
     LaunchedEffect(cameraService) {
@@ -731,7 +726,7 @@ fun CameraPreview(
                 
                 surfaceView
             },
-            update = { surfaceView ->
+            update = {
                 // No manual rotation needed - the Camera2 API handles orientation internally
                 // through the capture request JPEG_ORIENTATION setting in the camera service
                 Log.d("CameraPreview", "Preview updated for orientation: ${selectedOrientation?.mode}")

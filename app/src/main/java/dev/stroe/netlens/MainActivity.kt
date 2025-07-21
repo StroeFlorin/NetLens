@@ -539,6 +539,49 @@ fun CameraStreamingUI(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+            // Camera Stream Display - Only show when streaming
+            if (isStreaming && streamUrl.isNotEmpty()) {
+                // Calculate aspect ratio based ONLY on the camera resolution and orientation setting
+                // This ensures the preview maintains the correct ratio regardless of device orientation
+                val aspectRatio = selectedResolution?.let { resolution ->
+                    val orientationMode = selectedOrientation?.mode?.let { mode ->
+                        try { dev.stroe.netlens.camera.OrientationMode.valueOf(mode) }
+                        catch (e: Exception) { dev.stroe.netlens.camera.OrientationMode.AUTO }
+                    } ?: dev.stroe.netlens.camera.OrientationMode.AUTO
+
+                    when (orientationMode) {
+                        dev.stroe.netlens.camera.OrientationMode.LANDSCAPE -> resolution.width.toFloat() / resolution.height.toFloat()
+                        dev.stroe.netlens.camera.OrientationMode.PORTRAIT -> resolution.height.toFloat() / resolution.width.toFloat()
+                        dev.stroe.netlens.camera.OrientationMode.AUTO -> if (configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) resolution.width.toFloat() / resolution.height.toFloat() else resolution.height.toFloat() / resolution.width.toFloat()
+                    }
+                } ?: run { 4f / 3f }
+
+                Card(
+                    modifier = Modifier
+                        .let { modifier ->
+                            val orientationMode = selectedOrientation?.mode?.let { mode ->
+                                try { dev.stroe.netlens.camera.OrientationMode.valueOf(mode) }
+                                catch (e: Exception) { dev.stroe.netlens.camera.OrientationMode.AUTO }
+                            } ?: dev.stroe.netlens.camera.OrientationMode.AUTO
+
+                            val isDeviceLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+                            val shouldLimitWidth = when (orientationMode) {
+                                dev.stroe.netlens.camera.OrientationMode.PORTRAIT -> isDeviceLandscape
+                                dev.stroe.netlens.camera.OrientationMode.LANDSCAPE -> !isDeviceLandscape
+                                dev.stroe.netlens.camera.OrientationMode.AUTO -> false
+                            }
+
+                            if (shouldLimitWidth) modifier.fillMaxWidth(0.6f).aspectRatio(aspectRatio) else modifier.fillMaxWidth().aspectRatio(aspectRatio)
+                        },
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    CameraPreview(
+                        cameraService = cameraService,
+                        selectedOrientation = selectedOrientation,
+                        modifier = Modifier.padding(2.dp)
+                    )
+                }
+            }
             // Settings and Status Display
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -642,79 +685,6 @@ fun CameraStreamingUI(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
-
-            // Camera Stream Display - Only show when streaming
-            if (isStreaming && streamUrl.isNotEmpty()) {
-                // Calculate aspect ratio based ONLY on the camera resolution and orientation setting
-                // This ensures the preview maintains the correct ratio regardless of device orientation
-                val aspectRatio = selectedResolution?.let { resolution ->
-                    val orientationMode = selectedOrientation?.mode?.let { mode ->
-                        try { dev.stroe.netlens.camera.OrientationMode.valueOf(mode) } 
-                        catch (e: Exception) { dev.stroe.netlens.camera.OrientationMode.AUTO }
-                    } ?: dev.stroe.netlens.camera.OrientationMode.AUTO
-                    
-                    when (orientationMode) {
-                        dev.stroe.netlens.camera.OrientationMode.LANDSCAPE -> {
-                            // Force landscape: always use landscape aspect ratio (width > height)
-                            resolution.width.toFloat() / resolution.height.toFloat()
-                        }
-                        dev.stroe.netlens.camera.OrientationMode.PORTRAIT -> {
-                            // Force portrait: always use portrait aspect ratio (height > width)
-                            resolution.height.toFloat() / resolution.width.toFloat()
-                        }
-                        dev.stroe.netlens.camera.OrientationMode.AUTO -> {
-                            // Auto: adjust based on current device orientation
-                            if (configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
-                                resolution.width.toFloat() / resolution.height.toFloat()
-                            } else {
-                                resolution.height.toFloat() / resolution.width.toFloat()
-                            }
-                        }
-                    }
-                } ?: run {
-                    // Fallback to 4:3 ratio if no resolution is available
-                    4f / 3f  // Default landscape fallback
-                }
-                
-                Card(
-                    modifier = Modifier
-                        .let { modifier ->
-                            // When forcing portrait in landscape mode, or forcing landscape in portrait mode,
-                            // don't fill the full width to maintain proper aspect ratio
-                            val orientationMode = selectedOrientation?.mode?.let { mode ->
-                                try { dev.stroe.netlens.camera.OrientationMode.valueOf(mode) } 
-                                catch (e: Exception) { dev.stroe.netlens.camera.OrientationMode.AUTO }
-                            } ?: dev.stroe.netlens.camera.OrientationMode.AUTO
-                            
-                            val isDeviceLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-                            val shouldLimitWidth = when (orientationMode) {
-                                dev.stroe.netlens.camera.OrientationMode.PORTRAIT -> isDeviceLandscape
-                                dev.stroe.netlens.camera.OrientationMode.LANDSCAPE -> !isDeviceLandscape
-                                dev.stroe.netlens.camera.OrientationMode.AUTO -> false
-                            }
-                            
-                            if (shouldLimitWidth) {
-                                // Limit width to maintain proper aspect ratio
-                                modifier
-                                    .fillMaxWidth(0.6f) // Use 60% of available width
-                                    .aspectRatio(aspectRatio)
-                            } else {
-                                // Use full width when orientations match or in auto mode
-                                modifier
-                                    .fillMaxWidth()
-                                    .aspectRatio(aspectRatio)
-                            }
-                        },
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    // Display the actual camera preview without forced stretching
-                    CameraPreview(
-                        cameraService = cameraService,
-                        selectedOrientation = selectedOrientation,
-                        modifier = Modifier.padding(2.dp) // Only padding, no size forcing
-                    )
-                }
-            }
         }
     }
 

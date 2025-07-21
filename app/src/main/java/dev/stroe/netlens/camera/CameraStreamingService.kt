@@ -26,6 +26,10 @@ data class CameraInfo(val id: String, val name: String, val facing: Int) {
     override fun toString(): String = name
 }
 
+data class FPSSetting(val fps: Int, val delayMs: Long, val name: String) {
+    override fun toString(): String = name
+}
+
 class CameraStreamingService(private val context: Context) {
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
@@ -35,6 +39,7 @@ class CameraStreamingService(private val context: Context) {
     private var mjpegServer: MjpegHttpServer? = null
     private var currentPort: Int = 8082
     private var currentResolution: Resolution = Resolution(1280, 720, "HD")
+    private var currentFPS: FPSSetting = AVAILABLE_FPS_SETTINGS[2] // Default to 30 FPS
     private var currentCameraId: String = ""
     private var deviceOrientation: Int = 0
 
@@ -44,6 +49,13 @@ class CameraStreamingService(private val context: Context) {
 
     companion object {
         private const val TAG = "CameraStreamingService"
+        
+        val AVAILABLE_FPS_SETTINGS = listOf(
+            FPSSetting(15, 66, "15 FPS"),
+            FPSSetting(24, 41, "24 FPS"),
+            FPSSetting(30, 33, "30 FPS"),
+            FPSSetting(60, 16, "60 FPS")
+        )
     }
 
     fun getAvailableCameras(): List<CameraInfo> {
@@ -146,6 +158,18 @@ class CameraStreamingService(private val context: Context) {
             updateCaptureRequestOrientation()
         }
     }
+
+    fun setFPS(fpsSetting: FPSSetting) {
+        currentFPS = fpsSetting
+        Log.d(TAG, "FPS changed to: ${fpsSetting.name}")
+        
+        // Update server FPS if streaming
+        mjpegServer?.updateFPS(fpsSetting.delayMs)
+    }
+
+    fun getCurrentFPS(): FPSSetting = currentFPS
+
+    fun getAvailableFPS(): List<FPSSetting> = AVAILABLE_FPS_SETTINGS
 
     private fun updateCaptureRequestOrientation() {
         val surface = imageReader?.surface
@@ -277,7 +301,7 @@ class CameraStreamingService(private val context: Context) {
 
             imageReader = ImageReader.newInstance(size.width, size.height, ImageFormat.JPEG, 2)
             if (mjpegServer == null) {
-                mjpegServer = MjpegHttpServer(port)
+                mjpegServer = MjpegHttpServer(port, currentFPS.delayMs)
             }
 
             imageReader?.setOnImageAvailableListener({ reader ->

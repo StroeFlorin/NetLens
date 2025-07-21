@@ -8,12 +8,13 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
 
-class MjpegHttpServer(private val port: Int) {
+class MjpegHttpServer(private val port: Int, private var fpsDelayMs: Long = 33L) {
     private var serverSocket: ServerSocket? = null
     private var isRunning = false
     private val clients = ConcurrentHashMap<String, OutputStream>()
     private var currentFrame: ByteArray? = null
     private val serverScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var lastFrameTime = 0L
 
     companion object {
         private const val TAG = "MjpegHttpServer"
@@ -61,8 +62,20 @@ class MjpegHttpServer(private val port: Int) {
 
     fun updateFrame(frameData: ByteArray) {
         currentFrame = frameData
-        Log.d(TAG, "Frame updated: ${frameData.size} bytes, ${clients.size} clients")
-        broadcastFrame(frameData)
+        
+        // Only broadcast if enough time has passed since last frame
+        val currentTime = System.currentTimeMillis()
+        if (currentTime - lastFrameTime >= fpsDelayMs) {
+            Log.d(TAG, "Frame updated: ${frameData.size} bytes, ${clients.size} clients")
+            broadcastFrame(frameData)
+            lastFrameTime = currentTime
+        }
+    }
+
+    fun updateFPS(delayMs: Long) {
+        fpsDelayMs = delayMs
+        lastFrameTime = 0 // Reset to allow immediate next frame
+        Log.d(TAG, "FPS delay updated to: ${delayMs}ms")
     }
 
     private fun handleClient(socket: Socket) {
@@ -95,9 +108,9 @@ class MjpegHttpServer(private val port: Int) {
                     sendFrame(output, frame)
                 }
 
-                // Keep connection alive
+                // Keep connection alive and wait for client disconnect
                 while (isRunning && !socket.isClosed) {
-                    delay(33) // ~30 FPS
+                    delay(1000) // Check every second for connection status
                 }
 
             } catch (e: IOException) {

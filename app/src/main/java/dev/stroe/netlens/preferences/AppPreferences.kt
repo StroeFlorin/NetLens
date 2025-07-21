@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import dev.stroe.netlens.camera.Resolution
 import dev.stroe.netlens.camera.CameraInfo
+import dev.stroe.netlens.camera.FPSSetting
 import androidx.core.content.edit
 
 class AppPreferences(context: Context) {
@@ -20,6 +21,9 @@ class AppPreferences(context: Context) {
         private const val KEY_CAMERA_ID = "camera_id"
         private const val KEY_CAMERA_NAME = "camera_name"
         private const val KEY_CAMERA_FACING = "camera_facing"
+        private const val KEY_FPS = "fps"
+        private const val KEY_FPS_DELAY_MS = "fps_delay_ms"
+        private const val KEY_FPS_NAME = "fps_name"
         private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
         
         // Default values
@@ -27,6 +31,9 @@ class AppPreferences(context: Context) {
         private const val DEFAULT_RESOLUTION_WIDTH = 1280
         private const val DEFAULT_RESOLUTION_HEIGHT = 720
         private const val DEFAULT_RESOLUTION_NAME = "HD"
+        private const val DEFAULT_FPS = 30
+        private const val DEFAULT_FPS_DELAY_MS = 33L
+        private const val DEFAULT_FPS_NAME = "30 FPS"
     }
 
     fun savePort(port: String) {
@@ -83,6 +90,28 @@ class AppPreferences(context: Context) {
         return preferences.contains(KEY_CAMERA_ID) && 
                preferences.contains(KEY_CAMERA_NAME) && 
                preferences.contains(KEY_CAMERA_FACING)
+    }
+
+    fun saveFPS(fpsSetting: FPSSetting) {
+        preferences.edit {
+            putInt(KEY_FPS, fpsSetting.fps)
+            putLong(KEY_FPS_DELAY_MS, fpsSetting.delayMs)
+            putString(KEY_FPS_NAME, fpsSetting.name)
+        }
+    }
+
+    fun getFPS(): FPSSetting {
+        val fps = preferences.getInt(KEY_FPS, DEFAULT_FPS)
+        val delayMs = preferences.getLong(KEY_FPS_DELAY_MS, DEFAULT_FPS_DELAY_MS)
+        val name = preferences.getString(KEY_FPS_NAME, DEFAULT_FPS_NAME) ?: DEFAULT_FPS_NAME
+        
+        return FPSSetting(fps, delayMs, name)
+    }
+
+    fun hasFPS(): Boolean {
+        return preferences.contains(KEY_FPS) && 
+               preferences.contains(KEY_FPS_DELAY_MS) && 
+               preferences.contains(KEY_FPS_NAME)
     }
     
     fun getKeepScreenOn(): Boolean {

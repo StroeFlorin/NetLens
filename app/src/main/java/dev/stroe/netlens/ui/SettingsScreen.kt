@@ -14,6 +14,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import dev.stroe.netlens.camera.CameraInfo
 import dev.stroe.netlens.camera.Resolution
+import dev.stroe.netlens.camera.FPSSetting
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -22,14 +23,18 @@ fun SettingsScreen(
     selectedCamera: CameraInfo?,
     availableResolutions: List<Resolution>,
     selectedResolution: Resolution?,
+    availableFPS: List<FPSSetting>,
+    selectedFPS: FPSSetting?,
     selectedPort: String,
     onCameraChanged: (CameraInfo) -> Unit,
     onResolutionChanged: (Resolution) -> Unit,
+    onFPSChanged: (FPSSetting) -> Unit,
     onPortChanged: (String) -> Unit,
     onNavigateBack: () -> Unit
 ) {
     var showCameraDropdown by remember { mutableStateOf(false) }
     var showResolutionDropdown by remember { mutableStateOf(false) }
+    var showFPSDropdown by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
 
     // Handle system back button
@@ -151,6 +156,54 @@ fun SettingsScreen(
                                         contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
                                     )
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // FPS Configuration
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp)
+                ) {
+                    Text(
+                        text = "Frame Rate",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    ExposedDropdownMenuBox(
+                        expanded = showFPSDropdown,
+                        onExpandedChange = { showFPSDropdown = !showFPSDropdown }
+                    ) {
+                        OutlinedTextField(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                            readOnly = true,
+                            value = selectedFPS?.toString() ?: "Select FPS",
+                            onValueChange = {},
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = showFPSDropdown) }
+                        )
+
+                        ExposedDropdownMenu(
+                            expanded = showFPSDropdown,
+                            onDismissRequest = { showFPSDropdown = false }
+                        ) {
+                            availableFPS.forEach { fps ->
+                                DropdownMenuItem(
+                                    text = { Text(fps.toString()) },
+                                    onClick = {
+                                        onFPSChanged(fps)
+                                        showFPSDropdown = false
+                                    },
+                                    contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
+                                )
                             }
                         }
                     }

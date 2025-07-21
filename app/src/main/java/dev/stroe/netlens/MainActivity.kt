@@ -39,6 +39,7 @@ import android.webkit.WebViewClient
 import dev.stroe.netlens.camera.CameraStreamingService
 import dev.stroe.netlens.camera.Resolution
 import dev.stroe.netlens.camera.CameraInfo
+import dev.stroe.netlens.camera.FPSSetting
 import dev.stroe.netlens.preferences.AppPreferences
 import dev.stroe.netlens.ui.theme.NetLensTheme
 import dev.stroe.netlens.ui.SettingsScreen
@@ -55,6 +56,8 @@ class MainActivity : ComponentActivity() {
     private var selectedPort by mutableStateOf("8082")
     private var availableCameras by mutableStateOf<List<CameraInfo>>(emptyList())
     private var selectedCamera by mutableStateOf<CameraInfo?>(null)
+    private var availableFPS by mutableStateOf<List<FPSSetting>>(emptyList())
+    private var selectedFPS by mutableStateOf<FPSSetting?>(null)
     private var showSettings by mutableStateOf(false)
     private var keepScreenOn by mutableStateOf(true)
 
@@ -96,6 +99,8 @@ class MainActivity : ComponentActivity() {
                         selectedCamera = selectedCamera,
                         availableResolutions = availableResolutions,
                         selectedResolution = selectedResolution,
+                        availableFPS = availableFPS,
+                        selectedFPS = selectedFPS,
                         selectedPort = selectedPort,
                         onCameraChanged = { camera ->
                             selectedCamera = camera
@@ -112,6 +117,12 @@ class MainActivity : ComponentActivity() {
                             cameraService.setResolution(resolution)
                             // Save the new resolution
                             appPreferences.saveResolution(resolution)
+                        },
+                        onFPSChanged = { fps ->
+                            selectedFPS = fps
+                            cameraService.setFPS(fps)
+                            // Save the new FPS
+                            appPreferences.saveFPS(fps)
                         },
                         onPortChanged = { port ->
                             selectedPort = port
@@ -168,6 +179,11 @@ class MainActivity : ComponentActivity() {
             selectedCamera = appPreferences.getCamera()
         }
         
+        // Load saved FPS (will be applied after camera service is initialized)
+        if (appPreferences.hasFPS()) {
+            selectedFPS = appPreferences.getFPS()
+        }
+        
         // Load keep screen on setting
         keepScreenOn = appPreferences.getKeepScreenOn()
     }
@@ -219,6 +235,27 @@ class MainActivity : ComponentActivity() {
             }
         } else {
             selectedResolution = cameraService.getCurrentResolution()
+        }
+        
+        // Initialize available FPS settings
+        availableFPS = cameraService.getAvailableFPS()
+        
+        // Apply saved FPS if available and valid
+        val savedFPS = selectedFPS
+        if (savedFPS != null) {
+            // Check if the saved FPS is still available
+            val matchingFPS = availableFPS.find { 
+                it.fps == savedFPS.fps && it.delayMs == savedFPS.delayMs 
+            }
+            if (matchingFPS != null) {
+                selectedFPS = matchingFPS
+                cameraService.setFPS(matchingFPS)
+            } else {
+                // Fallback to default if saved FPS is no longer available
+                selectedFPS = cameraService.getCurrentFPS()
+            }
+        } else {
+            selectedFPS = cameraService.getCurrentFPS()
         }
     }
 
